@@ -172,6 +172,25 @@ func TestArtifactsExactShape(t *testing.T) {
 
 func itoa(n int64) string { b, _ := json.Marshal(n); return string(b) }
 
+func TestAbortedTurnRowsAreNotCountedAsPending(t *testing.T) {
+	st, sid := cloudStore(t)
+	ctx := context.Background()
+	// The desktop marks a turn aborted when the process died inside it.
+	if _, err := st.DB().ExecContext(ctx, `UPDATE turn SET state = 'aborted' WHERE session_id = ?`, sid); err != nil {
+		t.Fatal(err)
+	}
+	o, err := st.Pending(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := counts(t, st)[store.SyncPending], int64(o.Len()); got != want {
+		t.Fatalf("pending count %d, outbox holds %d", got, want)
+	}
+	if o.Len() != 2 {
+		t.Fatalf("outbox holds %d rows, want the session and the checkpoint", o.Len())
+	}
+}
+
 func TestHashFormulasNullsAreEmpty(t *testing.T) {
 	r := store.OutSession{ID: "as-1", TokenTotals: "{}"}
 	if SessionHash(r) != hashOf("as-1::::{}") {

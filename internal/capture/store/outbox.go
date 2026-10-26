@@ -242,10 +242,19 @@ func (s *Store) SetDrainState(ctx context.Context, state string, now time.Time) 
 }
 
 // OutboxCounts counts rows by sync_state across the uploaded tables.
+//
+// Pending leaves out rows of aborted turns, which Pending never reads: counting
+// them reported work as waiting to sync that never would, so the pending count
+// could not reach zero.
 func (s *Store) OutboxCounts(ctx context.Context) (map[string]int64, error) {
 	out := map[string]int64{}
 	for _, t := range syncTables {
-		rows, err := s.db.QueryContext(ctx, `SELECT sync_state, COUNT(*) FROM `+t+` GROUP BY sync_state`) //nolint:gosec // G202: fixed table list
+		q := `SELECT sync_state, COUNT(*) FROM ` + t + ` x GROUP BY sync_state` //nolint:gosec // G202: fixed table list
+		if t == "agent_message" || t == "tool_call" {
+			q = `SELECT sync_state, COUNT(*) FROM ` + t + ` x WHERE sync_state != 'pending'` + //nolint:gosec // G202: fixed table list
+				` OR (1` + notAborted + `) GROUP BY sync_state`
+		}
+		rows, err := s.db.QueryContext(ctx, q)
 		if err != nil {
 			return nil, err
 		}
