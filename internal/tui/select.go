@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/term"
 )
 
 // ErrCancelled is returned when the user leaves a prompt without choosing.
@@ -19,9 +20,10 @@ func Interactive() bool {
 	return isTerminal(os.Stdin) && isTerminal(os.Stdout)
 }
 
+// isTerminal asks the device itself: /dev/null is a character device too,
+// and under cron, CI or a service it is both stdin and stdout.
 func isTerminal(f *os.File) bool {
-	info, err := f.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(f.Fd())
 }
 
 var (
