@@ -40,7 +40,7 @@ func shellQuote(s string) string {
 
 // MissingMessage is the message a Claude-shaped agent shows when the hook
 // is installed but atlas-cli is not.
-const MissingMessage = `{"systemMessage":"Atlas is enabled here but atlas-cli is not installed or not on PATH. Install: https://github.com/tryatlas/atlas-cli#install"}`
+const MissingMessage = `{"systemMessage":"Atlas is enabled here but atlas-cli is not installed or not on PATH. Install: https://github.com/tryatlas/cli#install"}`
 
 // Owned reports that a hook command is Atlas's: the bare command, or the
 // bare command inside a Wrap.

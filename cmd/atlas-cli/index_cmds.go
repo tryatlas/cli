@@ -91,6 +91,7 @@ func indexMemory(ctx context.Context, root, scope string, download bool, step tu
 	_ = os.Remove(clistate.Path(root, indexPendingFile)) // this pass covers what asked for it
 
 	plan := embed.Current()
+	var downloadErr error
 	if plan.Backend == embed.CPU && download && embed.LoadError() != nil {
 		// Damaged files are kept by a download (it fetches what is missing):
 		// they go first. The app's copy is the same files, as damaged.
@@ -106,7 +107,13 @@ func indexMemory(ctx context.Context, root, scope string, download bool, step tu
 				frac(0.8 * float64(done) / float64(total))
 			}
 		}); err != nil {
-			return "", fmt.Errorf("download the model: %w", err)
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("download the model: %w", ctx.Err())
+			}
+			// The model is an improvement, not a requirement: without it
+			// the index is still built, on keywords.
+			downloadErr = err
+			step("The model could not be downloaded; indexing on keywords")
 		}
 	}
 	vectors := record.Vectors()
@@ -148,7 +155,9 @@ func indexMemory(ctx context.Context, root, scope string, download bool, step tu
 		case embed.Off:
 			msg += " Keyword search only (" + plan.Note + ")."
 		case embed.CPU:
-			if err := embed.LoadError(); err != nil {
+			if downloadErr != nil {
+				msg += fmt.Sprintf(" The model could not be downloaded (%v): keyword search only for now (atlas-cli memory index tries again).", downloadErr)
+			} else if err := embed.LoadError(); err != nil {
 				msg += fmt.Sprintf(" The model files do not load (%v): keyword search only (atlas-cli memory index downloads them again).", err)
 			} else {
 				msg += " No model on this machine: keyword search only (atlas-cli memory index downloads it)."
