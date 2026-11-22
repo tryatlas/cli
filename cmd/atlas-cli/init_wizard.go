@@ -86,10 +86,16 @@ func finishInit(cmd *cobra.Command, root string, local, guided bool, steps initS
 		if err := tui.WorkProgress(out, "Setting up memory search", func(step tui.StepFunc, frac tui.FracFunc) (string, error) {
 			return indexMemory(cmd.Context(), root, scope, true, step, frac)
 		}); err != nil {
-			return err
+			if cmd.Context().Err() != nil {
+				return err
+			}
+			// Memory search is the last, optional step: a failed index
+			// (the bar has shown why) must not leave the agents unhooked.
+			tui.Note(out, "Memory search uses keywords for now; atlas-cli memory index sets it up later.")
+			spawnIndex(root)
 		}
-	} else if embed.Available() {
-		spawnIndex(root) // the index, in the background
+	} else {
+		spawnIndex(root) // the index, in the background (keywords without the model)
 	}
 	if len(agents) > 0 || ask {
 		fmt.Fprintln(out)
