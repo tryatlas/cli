@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 	state, _ := os.MkdirTemp("", "atlas-state-") // never the user's CLI state
 	_ = os.Setenv("XDG_STATE_HOME", state)
 	_ = os.Setenv("ATLAS_MODELS_DIR", state) // no embedding model: deterministic
+	// Never the user's Projects: a test that does not chdir must not find a
+	// binding (or a workspace) above the source tree.
+	cwd, _ := os.MkdirTemp("", "atlas-cwd-")
+	_ = os.Chdir(cwd)
 	os.Exit(m.Run())
 }
 
