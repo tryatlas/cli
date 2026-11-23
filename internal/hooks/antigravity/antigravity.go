@@ -154,7 +154,7 @@ func (Agent) Uninstall(root string) error {
 		return nil
 	}
 	delete(file, Key)
-	return hooks.SaveJSON(path, file, 0o644)
+	return hooks.SaveOrRemoveJSON(path, file, 0o644)
 }
 
 // State compares the "atlas" entry with what Install writes.

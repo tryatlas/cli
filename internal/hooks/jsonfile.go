@@ -57,6 +57,20 @@ func SaveJSON(path string, v any, mode fs.FileMode) error {
 	return os.Rename(tmp, path)
 }
 
+// SaveOrRemoveJSON writes obj after Atlas's entries were taken out of it,
+// or removes the file when they were all it held: an empty object configures
+// nothing, and a "{}" left behind is an untracked file in every repository
+// an agent was hooked in (a workspace hooks many).
+func SaveOrRemoveJSON(path string, obj map[string]json.RawMessage, mode fs.FileMode) error {
+	if len(obj) > 0 {
+		return SaveJSON(path, obj, mode)
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 // Raw marshals v to a RawMessage without HTML escaping (hook commands hold
 // > and &).
 func Raw(v any) json.RawMessage {
@@ -212,7 +226,7 @@ func (c ClaudeShaped) Uninstall() error {
 	if mode == 0 {
 		mode = 0o600
 	}
-	return SaveJSON(c.Path, root, mode)
+	return SaveOrRemoveJSON(c.Path, root, mode)
 }
 
 // State compares the file with what Install would write.

@@ -74,9 +74,9 @@ func TestInstallIntoEmptyDir(t *testing.T) {
 	if err := a.Uninstall(root); err != nil {
 		t.Fatal(err)
 	}
-	_, top := readHooks(t, root)
-	if _, ok := top["hooks"]; ok {
-		t.Fatalf("hooks left after uninstall: %s", top["hooks"])
+	// Atlas's hooks were all the file held: it goes, not left as "{}".
+	if _, err := os.Stat(HooksPath(root)); !os.IsNotExist(err) {
+		t.Fatalf("hooks.json left after uninstall: %v", err)
 	}
 	if a.State(root) != hooks.Absent {
 		t.Fatal("expected absent after uninstall")
