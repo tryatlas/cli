@@ -24,6 +24,10 @@ func TestMain(m *testing.M) {
 	state, _ := os.MkdirTemp("", "atlas-state-") // never the user's CLI state
 	_ = os.Setenv("XDG_STATE_HOME", state)
 	_ = os.Setenv("ATLAS_MODELS_DIR", state) // no embedding model: deterministic
+	// Never the user's Projects: a test that does not chdir must not find a
+	// binding (or a workspace) above the source tree.
+	cwd, _ := os.MkdirTemp("", "atlas-cwd-")
+	_ = os.Chdir(cwd)
 	os.Exit(m.Run())
 }
 
@@ -73,6 +77,12 @@ var wantCommands = []string{
 	"uninstall",
 	"update",
 	"whoami",
+	"workspace",
+	"workspace add",
+	"workspace off",
+	"workspace on",
+	"workspace remove",
+	"workspace sync",
 }
 
 // allCommands is wantCommands plus one hooks entry point per registered
@@ -118,6 +128,7 @@ var implemented = map[string]bool{
 	"settings": true, "sync": true, "update": true, "uninstall": true, "memory index": true, "memory compute": true,
 	"agents add": true, "agents list": true, "agents remove": true, "agents sessions": true,
 	"hooks extract": true, "hooks git post-commit": true,
+	"workspace": true, "workspace on": true, "workspace off": true, "workspace sync": true, "workspace add": true, "workspace remove": true,
 }
 
 func TestStubsReportNotImplemented(t *testing.T) {

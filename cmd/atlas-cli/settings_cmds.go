@@ -153,7 +153,10 @@ func (b *settingsBackend) projectSection(ctx context.Context, p *project.Project
 			sec.Items = append(sec.Items, settings.Item{Label: "Bound to", Value: describeBinding(bind, sess),
 				Detail: "atlas-cli init binds the folder again (another organisation or Project)."})
 		}
-		if p.ScopeRoot != p.Root {
+		if p.Workspace {
+			sec.Items = append(sec.Items, settings.Item{Label: "Workspace", Value: workspaceRepos(p.Root),
+				Detail: "Agents started in any of these repositories record here and share one memory."})
+		} else if p.ScopeRoot != p.Root {
 			sec.Items = append(sec.Items, settings.Item{Label: "Memory lives at", Value: p.ScopeRoot})
 		}
 	}

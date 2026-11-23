@@ -18,13 +18,14 @@ import (
 	"github.com/tryatlas/cli/internal/tui/memview"
 )
 
-// openRecord opens the shared-memory record of the repository around the cwd.
+// openRecord opens the shared-memory record of the repository (or workspace)
+// around the cwd.
 func openRecord(cmd *cobra.Command, create bool) (*record.Store, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
-	scope := project.ScopeRoot(cmd.Context(), cwd)
+	scope := project.MemoryRoot(cmd.Context(), cwd)
 	st, err := record.Open(scope, create)
 	if errors.Is(err, record.ErrNoRecord) {
 		return nil, fmt.Errorf("no shared memory yet for %s", scope)
@@ -117,15 +118,22 @@ func runMCPBridge(cmd *cobra.Command, args []string) error {
 		}
 		root = cwd
 	}
+	cwd := root
+	if c, err := project.Canonical(root); err == nil {
+		cwd, root = c, c
+	}
 	if p, err := project.Discover(cmd.Context(), root); err == nil {
 		root = p.Root
-	} else if c, err := project.Canonical(root); err == nil {
-		root = c
+		if !p.Workspace {
+			cwd = root
+		}
+		// In a workspace the agent works in one member repository: its
+		// relative paths resolve there, not in the workspace folder.
 	}
 	if agentID == "" {
 		agentID = "unknown"
 	}
-	g := server.Grant{Agent: agentID, Cwd: root, SessionID: hooks.CurrentSession(root, agentID)}
+	g := server.Grant{Agent: agentID, Cwd: cwd, SessionID: hooks.CurrentSession(root, agentID)}
 	if rf := listener.ReadRunFile(root); rf != nil {
 		return server.RunBridge(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), server.NewUnixForwarder(rf.Socket, g))
 	}

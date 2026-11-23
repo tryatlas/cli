@@ -84,5 +84,5 @@ func unapproveClaude(root string) error {
 	} else {
 		obj["enabledMcpjsonServers"] = hooks.Raw(keep)
 	}
-	return hooks.SaveJSON(claudeLocalSettings(root), obj, 0o600)
+	return hooks.SaveOrRemoveJSON(claudeLocalSettings(root), obj, 0o600)
 }

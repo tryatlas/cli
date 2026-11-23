@@ -105,35 +105,53 @@ func runAgentsAdd(cmd *cobra.Command, args []string) error {
 }
 
 // installAgents writes the git hook, then each agent's hook and memory entry,
-// one line per agent.
+// one line per agent. In a workspace each member repository gets them too, so
+// an agent started in any of them records into the workspace (ADR-0015).
 func installAgents(ctx context.Context, out io.Writer, root string, agents []hooks.Agent, force, noMem bool) error {
-	if changed, err := hooks.InstallGitHooks(ctx, root); err != nil {
-		return fmt.Errorf("git hooks: %w", err)
-	} else if changed {
+	targets := project.Targets(root)
+	gitChanged := false
+	for _, t := range targets {
+		changed, err := hooks.InstallGitHooks(ctx, t)
+		if err != nil {
+			return fmt.Errorf("git hooks in %s: %w", t, err)
+		}
+		gitChanged = gitChanged || changed
+	}
+	if gitChanged {
 		fmt.Fprintln(out, "Installed the git post-commit hook (links sessions to commits).")
 	}
 	for _, a := range agents {
-		changed, err := a.Install(root, force)
-		if err != nil {
-			return fmt.Errorf("%s: %w", a.ID(), err)
+		changed, mchanged := false, false
+		w, hasMem := mcpconfig.For(a.ID())
+		for _, t := range targets {
+			c, err := a.Install(t, force)
+			if err != nil {
+				return fmt.Errorf("%s in %s: %w", a.ID(), t, err)
+			}
+			changed = changed || c
+			if hasMem && !noMem {
+				mc, err := w.Write(t)
+				if err != nil {
+					return fmt.Errorf("%s memory config in %s: %w", a.ID(), t, err)
+				}
+				mchanged = mchanged || mc
+			}
 		}
 		what := "already installed"
 		if changed {
 			what = "installed"
 		}
 		line := fmt.Sprintf("%s: hook %s", a.Name(), what)
-		if w, ok := mcpconfig.For(a.ID()); ok && !noMem {
-			mchanged, err := w.Write(root)
-			if err != nil {
-				return fmt.Errorf("%s memory config: %w", a.ID(), err)
-			}
-			if mchanged {
-				line += ", memory server added to " + strings.TrimPrefix(w.Path(root), root+"/")
-			} else {
-				line += ", memory server present"
-			}
-		} else if !ok && !noMem {
+		switch {
+		case hasMem && !noMem && mchanged:
+			line += ", memory server added to " + strings.TrimPrefix(w.Path(root), root+"/")
+		case hasMem && !noMem:
+			line += ", memory server present"
+		case !noMem:
 			line += " (no memory config writer for this agent yet)"
+		}
+		if n := len(targets) - 1; n > 0 {
+			line += " (workspace folder and " + repos(n) + ")"
 		}
 		fmt.Fprintln(out, line)
 		if _, err := exec.LookPath(a.Binary()); err != nil {
@@ -182,29 +200,39 @@ func agentLines(w io.Writer) io.Writer {
 }
 
 // removeAgents takes the Atlas entries out of each agent's config, and the
-// git hook once no agent is left.
+// git hook once no agent is left, in every member repository of a workspace.
 func removeAgents(ctx context.Context, out io.Writer, root string, agents []hooks.Agent) error {
+	targets := project.Targets(root)
 	for _, a := range agents {
-		if err := a.Uninstall(root); err != nil {
-			return fmt.Errorf("%s: %w", a.ID(), err)
-		}
-		if w, ok := mcpconfig.For(a.ID()); ok {
-			if err := w.Remove(root); err != nil {
-				return fmt.Errorf("%s memory config: %w", a.ID(), err)
+		for _, t := range targets {
+			if err := a.Uninstall(t); err != nil {
+				return fmt.Errorf("%s in %s: %w", a.ID(), t, err)
+			}
+			if w, ok := mcpconfig.For(a.ID()); ok {
+				if err := w.Remove(t); err != nil {
+					return fmt.Errorf("%s memory config in %s: %w", a.ID(), t, err)
+				}
 			}
 		}
 		fmt.Fprintf(out, "%s: Atlas hook and memory entry removed.\n", a.Name())
 	}
-	left := false
-	for _, a := range hooks.All() {
-		if a.State(root) != hooks.Absent {
-			left = true
+	removed := false
+	for _, t := range targets {
+		left := false
+		for _, a := range hooks.All() {
+			if a.State(t) != hooks.Absent {
+				left = true
+			}
 		}
-	}
-	if !left {
-		if err := hooks.UninstallGitHooks(ctx, root); err != nil {
+		if left || hooks.GitHooksState(ctx, t) == hooks.Absent {
+			continue
+		}
+		if err := hooks.UninstallGitHooks(ctx, t); err != nil {
 			return err
 		}
+		removed = true
+	}
+	if removed {
 		fmt.Fprintln(out, "No agent left: the git post-commit hook was removed too.")
 	}
 	return nil
@@ -377,7 +405,7 @@ func printAgents(ctx context.Context, w io.Writer, root string) {
 		return
 	}
 	fmt.Fprintf(w, "Agents:    %s\n", strings.Join(on, ", "))
-	if hooks.GitHooksState(ctx, root) != hooks.Current {
+	if project.InRepo(ctx, root) && hooks.GitHooksState(ctx, root) != hooks.Current {
 		fmt.Fprintln(w, "Git hook:  post-commit not installed (atlas-cli agents add <agent> installs it)")
 	}
 	if states, _ := hooks.ListStates(root, ""); len(states) > 0 {

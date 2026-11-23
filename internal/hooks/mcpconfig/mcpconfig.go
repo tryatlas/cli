@@ -139,7 +139,7 @@ func (j JSONServers) Remove(root string) error {
 	} else {
 		obj[j.Key] = hooks.Raw(servers)
 	}
-	return hooks.SaveJSON(j.Path(root), obj, 0o644)
+	return hooks.SaveOrRemoveJSON(j.Path(root), obj, 0o644)
 }
 
 // State compares the entry with what Write would put there.

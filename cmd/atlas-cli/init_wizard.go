@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -54,7 +55,7 @@ func finishInit(cmd *cobra.Command, root string, local, guided bool, steps initS
 		}
 	}
 	model := false
-	if guided && !embed.Available() && project.MemorySharing(project.ScopeRoot(cmd.Context(), root)) {
+	if guided && !embed.Available() && project.MemorySharing(project.MemoryRoot(cmd.Context(), root)) {
 		i, err := chooseStep(steps.step("Memory search"), "Download the memory search model? Agents then find memories by meaning, not only by words.", []tui.Choice{
 			{Label: "Download", Detail: embed.Size + ", once; the same model the Atlas app uses"},
 			{Label: "Not now", Detail: "keyword search; atlas-cli memory index downloads it later"},
@@ -82,7 +83,7 @@ func finishInit(cmd *cobra.Command, root string, local, guided bool, steps initS
 	// On a terminal the work runs under the progress bar, each line a step.
 	if model {
 		fmt.Fprintln(out)
-		scope := project.ScopeRoot(cmd.Context(), root)
+		scope := project.MemoryRoot(cmd.Context(), root)
 		if err := tui.WorkProgress(out, "Setting up memory search", func(step tui.StepFunc, frac tui.FracFunc) (string, error) {
 			return indexMemory(cmd.Context(), root, scope, true, step, frac)
 		}); err != nil {
@@ -222,4 +223,80 @@ func pickSync(cmd *cobra.Command, root string, guided bool, step tui.Step) (on, 
 		return false, false, err
 	}
 	return i == 0, true, nil
+}
+
+// pickWorkspace decides whether the launch dir is bound as a workspace, a
+// folder of repositories bound once (ADR-0015). A workspace captures every
+// repository below it, so it is opt-in: --workspace when given; else, for a
+// folder outside git that holds repositories, asked on a terminal with "This
+// folder only" pre-selected, and never without one (init names the
+// repositories and how to capture them). A folder that is already a
+// workspace stays one unless --workspace=false or the prompt says otherwise.
+func pickWorkspace(cmd *cobra.Command, launch, scope string, guided bool) (bool, error) {
+	flags := cmd.Flags()
+	members := project.Members(launch)
+	names := memberNames(launch, members)
+	if flags.Changed("workspace") {
+		if on, _ := flags.GetBool("workspace"); !on {
+			return false, nil
+		}
+		if launch != scope {
+			return false, fmt.Errorf("%s is inside the repository %s; a workspace is the folder that holds the repositories", launch, scope)
+		}
+		if len(members) == 0 {
+			return false, fmt.Errorf("%s holds no git repository; a workspace is a folder of repositories", launch)
+		}
+		if !guided {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Binding %s as a workspace of %s (%s).\n", launch, repos(len(members)), names)
+		}
+		return true, nil
+	}
+	current := project.IsWorkspace(launch)
+	if len(members) == 0 || (!current && project.InRepo(cmd.Context(), launch)) {
+		return current, nil
+	}
+	if !guided {
+		if !current {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Note: %s holds %s (%s). Agents started in them are not captured; atlas-cli workspace on captures them here.\n",
+				launch, repos(len(members)), names)
+		}
+		return current, nil
+	}
+	initial := 0
+	if current {
+		initial = 1
+	}
+	i, err := chooseStep(tui.Step{Title: "Workspace"}, fmt.Sprintf("This folder holds %s: %s.", repos(len(members)), names), []tui.Choice{
+		{Label: "This folder only", Detail: "agents started in those repositories are not captured here"},
+		{Label: "Workspace", Detail: "agents started in any of them record here and share one memory"},
+	}, initial)
+	if err != nil {
+		return false, err
+	}
+	return i == 1, nil
+}
+
+// memberNames lists member repositories by folder name, at most five.
+func memberNames(root string, members []string) string {
+	var names []string
+	for i, m := range members {
+		if i == 5 {
+			names = append(names, fmt.Sprintf("and %d more", len(members)-5))
+			break
+		}
+		rel, err := filepath.Rel(root, m)
+		if err != nil {
+			rel = filepath.Base(m)
+		}
+		names = append(names, rel)
+	}
+	return strings.Join(names, ", ")
+}
+
+// repos is "1 repository" or "n repositories".
+func repos(n int) string {
+	if n == 1 {
+		return "1 repository"
+	}
+	return fmt.Sprintf("%d repositories", n)
 }

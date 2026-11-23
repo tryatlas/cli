@@ -52,6 +52,7 @@ func newRootCmd() *cobra.Command {
 		newUninstallCmd(),
 		withRun(leaf("status", "Show login, organisation, Project, gates, capture health and agent integrations", cobra.NoArgs), runStatus),
 		newAgentsCmd(),
+		newWorkspaceCmd(),
 		newHooksCmd(),
 		newACPCmd(),
 		newMCPBridgeCmd(),
@@ -65,7 +66,7 @@ var splashGroups = []struct {
 	cmds  []string
 }{
 	{"Start", []string{"login", "init", "status", "settings"}},
-	{"Agents", []string{"agents", "sync"}},
+	{"Agents", []string{"agents", "workspace", "sync"}},
 	{"Memory and capture", []string{"memory", "capture"}},
 	{"Account", []string{"whoami", "org", "logout", "update", "uninstall"}},
 }
@@ -138,6 +139,7 @@ func newInitCmd() *cobra.Command {
 	c.Flags().StringSlice("agents", nil, "hook these agents (comma-separated ids, atlas-cli agents list); skips the agent step")
 	c.Flags().Bool("all-agents", false, "hook every agent detected on this machine; skips the agent step")
 	c.Flags().String("sync", "", "background sync: on or off (atlas-cli sync); skips the sync step")
+	c.Flags().Bool("workspace", false, "bind this folder of repositories once: agents started in each repository record here (off unless given; asked on a terminal)")
 	c.MarkFlagsMutuallyExclusive("agents", "all-agents")
 	c.MarkFlagsMutuallyExclusive("project", "create")
 	c.MarkFlagsMutuallyExclusive("local", "project")

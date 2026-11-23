@@ -154,7 +154,7 @@ func Run(ctx context.Context, o Options) (int, error) {
 		return 0, ErrSkipped
 	}
 	defer unlock()
-	scope := project.ScopeRoot(ctx, o.Root)
+	scope := project.MemoryRoot(ctx, o.Root)
 	st := loadState(scope, o.Root, o.Session)
 	excerpt, last, tools, err := conversation(ctx, o.Root, o.Session, st.LastTurn)
 	if errors.Is(err, sql.ErrNoRows) {
