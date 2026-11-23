@@ -60,10 +60,23 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		})
 	}
 
-	if launch != scope {
+	workspace, err := pickWorkspace(cmd, launch, scope, guided)
+	if err != nil {
+		return err
+	}
+	if workspace {
+		scope = launch // a workspace keeps its own memory, shared by its repositories
+	} else if launch != scope {
 		fmt.Fprintf(errOut, "Note: %s is inside the repository %s.\n"+
 			"Capture is recorded for this folder only; shared memory is shared with the whole repository.\n", launch, scope)
 		if err := confirm(cmd, yes, "Bind this subfolder as its own Project?"); err != nil {
+			return err
+		}
+	}
+	if p, err := project.Discover(ctx, launch); err == nil && p.Workspace && p.Root != launch {
+		fmt.Fprintf(errOut, "Note: %s is part of the workspace %s.\n"+
+			"Binding it splits it off: its sessions and memory stop going to the workspace.\n", launch, p.Root)
+		if err := confirm(cmd, yes, "Bind this folder as its own Project?"); err != nil {
 			return err
 		}
 	}
@@ -100,6 +113,9 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	steps := initSteps(local)
 
 	if err := bindFolder(cmd, a, sess, local, launch, scope, steps); err != nil {
+		return err
+	}
+	if err := project.SetWorkspace(launch, workspace); err != nil {
 		return err
 	}
 	ensureMemoryRecord(scope)
@@ -557,6 +573,9 @@ func statusLines(cmd *cobra.Command, w io.Writer) error {
 	if errors.Is(err, project.ErrNotInitialised) {
 		fmt.Fprintln(w, "Project:   not initialised here (atlas-cli init)")
 		dir, _ := project.Canonical(cwd)
+		if parent := project.PlainProjectAbove(ctx, dir); parent != "" {
+			fmt.Fprintf(w, "Hint:      %s is an Atlas Project but not a workspace; atlas-cli init --workspace there records this repository too\n", parent)
+		}
 		printGates(w, dir, nil)
 		return nil
 	}
@@ -574,7 +593,9 @@ func statusLines(cmd *cobra.Command, w io.Writer) error {
 	}
 	fmt.Fprintf(w, "Project:   %s\n", p.Root)
 	fmt.Fprintf(w, "Binding:   %s\n", describeBinding(b, sess))
-	if p.ScopeRoot != p.Root {
+	if p.Workspace {
+		fmt.Fprintf(w, "Workspace: %s (each shares this Project's sessions and memory)\n", workspaceRepos(p.Root))
+	} else if p.ScopeRoot != p.Root {
 		fmt.Fprintf(w, "Memory at: %s (shared with the whole repository)\n", p.ScopeRoot)
 	}
 	printGates(w, p.Root, b)
@@ -676,4 +697,13 @@ func printGates(w io.Writer, dir string, b *store.Binding) {
 	default:
 		fmt.Fprintln(w, "Capture:   paused")
 	}
+}
+
+// workspaceRepos names a workspace's member repositories for status lines.
+func workspaceRepos(root string) string {
+	m := project.Members(root)
+	if len(m) == 0 {
+		return "no repositories yet"
+	}
+	return repos(len(m)) + ": " + memberNames(root, m)
 }

@@ -20,8 +20,9 @@ var ErrNotInitialised = errors.New("this folder is not an Atlas Project; run atl
 // Project is a bound folder as seen from a working directory.
 type Project struct {
 	Root      string // canonical launch dir holding .atlas/sessions.db (capture's key)
-	ScopeRoot string // canonical repository root (shared memory's key)
+	ScopeRoot string // canonical repository root (shared memory's key); the workspace folder in a workspace
 	Cwd       string // canonical directory the lookup started from
+	Workspace bool   // Root is a folder of repositories bound once (ADR-0015)
 }
 
 // Canonical spells a path the one way the desktop does: absolute, symlinks
@@ -90,7 +91,9 @@ func ScopeRoot(ctx context.Context, dir string) string {
 
 // Discover finds the Project for cwd: the nearest directory from cwd upward
 // that holds .atlas/sessions.db with a binding row, stopping at the scope
-// root (ADR-0007). Nested bindings resolve to the nearest.
+// root (ADR-0007). Nested bindings resolve to the nearest. Past the scope
+// root only a workspace binding counts (ADR-0015): a stray binding in a
+// parent folder never captures an unrelated repository.
 func Discover(ctx context.Context, cwd string) (*Project, error) {
 	start, err := Canonical(cwd)
 	if err != nil {
@@ -99,12 +102,19 @@ func Discover(ctx context.Context, cwd string) (*Project, error) {
 	scope := ScopeRoot(ctx, start)
 	for dir := start; ; dir = filepath.Dir(dir) {
 		if bound(ctx, dir) {
+			if IsWorkspace(dir) {
+				return &Project{Root: dir, ScopeRoot: dir, Cwd: start, Workspace: true}, nil
+			}
 			return &Project{Root: dir, ScopeRoot: scope, Cwd: start}, nil
 		}
 		if dir == scope || dir == filepath.Dir(dir) || !within(dir, scope) {
-			return nil, ErrNotInitialised
+			break
 		}
 	}
+	if ws, ok := workspaceAbove(ctx, scope); ok {
+		return &Project{Root: ws, ScopeRoot: ws, Cwd: start, Workspace: true}, nil
+	}
+	return nil, ErrNotInitialised
 }
 
 // within reports whether dir is scope or below it.

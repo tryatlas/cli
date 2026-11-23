@@ -81,9 +81,10 @@ func (s *Server) Close() {
 
 func (s *Server) now() int64 { return s.Now().UnixMilli() }
 
-// store resolves cwd → scope root → the record, opened once per scope.
+// store resolves cwd → memory root (the scope root, or the workspace folder)
+// → the record, opened once per root.
 func (s *Server) store(ctx context.Context, cwd string) (*record.Store, error) {
-	scope := project.ScopeRoot(ctx, cwd)
+	scope := project.MemoryRoot(ctx, cwd)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if st, ok := s.stores[scope]; ok {
@@ -132,7 +133,7 @@ func (s *Server) Fold(ctx context.Context, g Grant, ev record.Event) error {
 	if err != nil {
 		return err
 	}
-	writeProjectJSON(g.Cwd)
+	writeProjectJSON(labelDir(ctx, g.Cwd))
 	ev.Agent, ev.Session = g.Agent, g.SessionID
 	if ev.At == 0 {
 		ev.At = s.now()
@@ -155,7 +156,7 @@ func (s *Server) SessionEnded(ctx context.Context, g Grant) {
 		_ = st.SessionEnd(ctx, g.SessionID, g.Agent, now)
 		// The handoff note the next session's briefing shows, as the
 		// desktop's lifecycle writes it.
-		_ = st.WriteHandoff(ctx, g.SessionID, g.Agent, project.ScopeRoot(ctx, g.Cwd), now)
+		_ = st.WriteHandoff(ctx, g.SessionID, g.Agent, project.MemoryRoot(ctx, g.Cwd), now)
 	}
 }
 
@@ -168,6 +169,16 @@ func (s *Server) Capture(ctx context.Context, g Grant, reply string) {
 	if st, err := s.store(ctx, g.Cwd); err == nil {
 		_, _ = st.CaptureCandidates(ctx, reply, g.Agent, g.SessionID, s.now())
 	}
+}
+
+// labelDir is where project.json goes: the workspace folder for a session in
+// one of its repositories (an .atlas/ there would show up in that repository's
+// git status), else the cwd as before.
+func labelDir(ctx context.Context, cwd string) string {
+	if p, err := project.Discover(ctx, cwd); err == nil && p.Workspace {
+		return p.Root
+	}
+	return cwd
 }
 
 // writeProjectJSON writes <launch dir>/.atlas/project.json on the first
@@ -337,7 +348,7 @@ func (s *Server) call(ctx context.Context, g Grant, name string, args json.RawMe
 	case "memory_remember":
 		out, err = t.remember(args)
 		if err == nil {
-			writeProjectJSON(g.Cwd)
+			writeProjectJSON(labelDir(ctx, g.Cwd))
 		}
 	case "memory_feedback":
 		out, err = t.feedback(args)

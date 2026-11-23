@@ -116,7 +116,8 @@ func uninstallRoots(ctx context.Context) []string {
 }
 
 // cleanProject stops a Project's background listener and takes Atlas's
-// entries out of every agent config and the git hooks.
+// entries out of every agent config and the git hooks, in each member
+// repository too when the Project is a workspace.
 func cleanProject(ctx context.Context, out io.Writer, root string) error {
 	var errs []error
 	if pid, err := haltListener(root); err != nil {
@@ -124,33 +125,43 @@ func cleanProject(ctx context.Context, out io.Writer, root string) error {
 	} else if pid != 0 {
 		fmt.Fprintf(out, "Stopped the listener for %s (pid %d).\n", root, pid)
 	}
+	for _, t := range project.Targets(root) {
+		errs = append(errs, unhookFolder(ctx, out, t)...)
+	}
+	return errors.Join(errs...)
+}
+
+// unhookFolder takes Atlas's entries out of every agent config and the git
+// hooks of one folder.
+func unhookFolder(ctx context.Context, out io.Writer, t string) []error {
+	var errs []error
 	for _, a := range hooks.All() {
 		mw, hasMem := mcpconfig.For(a.ID())
-		hooked := a.State(root) != hooks.Absent
-		mem := hasMem && mw.State(root) != hooks.Absent
+		hooked := a.State(t) != hooks.Absent
+		mem := hasMem && mw.State(t) != hooks.Absent
 		if !hooked && !mem {
 			continue
 		}
 		if hooked {
-			if err := a.Uninstall(root); err != nil {
+			if err := a.Uninstall(t); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", a.ID(), err))
 				continue
 			}
 		}
 		if mem {
-			if err := mw.Remove(root); err != nil {
+			if err := mw.Remove(t); err != nil {
 				errs = append(errs, fmt.Errorf("%s memory config: %w", a.ID(), err))
 				continue
 			}
 		}
-		fmt.Fprintf(out, "%s: Atlas hook and memory entry removed from %s.\n", a.Name(), root)
+		fmt.Fprintf(out, "%s: Atlas hook and memory entry removed from %s.\n", a.Name(), t)
 	}
-	if hooks.GitHooksState(ctx, root) != hooks.Absent {
-		if err := hooks.UninstallGitHooks(ctx, root); err != nil {
+	if hooks.GitHooksState(ctx, t) != hooks.Absent {
+		if err := hooks.UninstallGitHooks(ctx, t); err != nil {
 			errs = append(errs, fmt.Errorf("git hooks: %w", err))
 		} else {
-			fmt.Fprintf(out, "Removed the git post-commit hook from %s.\n", root)
+			fmt.Fprintf(out, "Removed the git post-commit hook from %s.\n", t)
 		}
 	}
-	return errors.Join(errs...)
+	return errs
 }

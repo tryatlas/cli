@@ -1655,3 +1655,68 @@ Not verified:
 - Not run on Linux: cgroup limits and the per-thread renice are covered by
   unit tests on fixture files only; CI's Linux runners compile and test it.
 - `TestMatchesTheAppsVectors` needs an app-written record and was skipped.
+
+## v0.7.0: workspaces, one Project for a folder of repositories (ADR-0015)
+
+A layout asked for by enterprise users: one folder per product, each part
+(`frontend/`, `backend/`, …) its own git repository. Discovery stopped at
+the repository, so an agent started in `backend/` found no Project.
+
+Built:
+
+- `internal/project`: the `.atlas/workspace.json` marker (a sidecar, so
+  `sessions.db` stays the app's schema), `Members` (child folders holding
+  `.git` and no binding of their own, plus folders added by hand),
+  `Targets`, `MemoryRoot`, `PlainProjectAbove`. `Discover` walks past the
+  scope root only to a bound workspace; a plain binding above a repository
+  is still never found.
+- Memory: the server, extraction, the `memory` commands and init resolve
+  `MemoryRoot`, so a workspace has one record; `mcp-bridge` keeps the member
+  as the session's cwd, so relative paths resolve there and citations are
+  spelled from the workspace (`backend/src/x.go`); `project.json` goes to the
+  workspace folder, never into a member.
+- `init --workspace`, opt-in: asked on a terminal with "This folder only"
+  pre-selected, never made without one (init names the repositories and
+  `atlas-cli workspace on`); a re-run keeps a workspace. `agents add`,
+  `agents remove` and `uninstall` act on every member; `status` and
+  `settings` list the members; `status` in a repository under a plain
+  Project points at `atlas-cli init --workspace`.
+- `atlas-cli workspace` (`on`, `off`, `sync`, `add <folder>`,
+  `remove <folder>`).
+- Command tests start in a temporary directory: two of them had found a
+  real Project above the source tree and unhooked it.
+
+Verified in a sandbox (Docker, a clean copy of the sources, no network but
+for the model download): gofmt, vet, `go test` and `-race` on 34 packages;
+62 end-to-end workspace checks (init, sessions from three repositories and a
+folder without git landing in one store, a memory remembered in one
+repository found from another, a repository added later, a split-off
+repository, off and on, opt-in and safety, the init wizard on a pty,
+uninstall), of which the v0.6.1 binary fails 42 of the first 56; the 27
+earlier end-to-end checks (20 offline, 7 online). Cross-builds for the four
+targets, lint and `go mod tidy -diff` clean, `make release-check`,
+`make snapshot`, and install.sh against the snapshot.
+
+Verified live: sessions started in a member repository of a cloud-bound
+workspace reached the cloud Project.
+
+Fixed before release:
+
+- The first build made a workspace without asking when init ran without a
+  terminal, and pre-selected it on one. One init in a folder of unrelated
+  projects pulled ten repositories into one cloud Project. A workspace is
+  opt-in now.
+- Taking Atlas's hooks or memory entry out of a config file that held
+  nothing else left it as `{}`: after `workspace off` every member
+  repository had an untracked `.mcp.json`. Such a file is removed now
+  (`hooks.SaveOrRemoveJSON`), as the Codex, Copilot and OpenCode writers
+  already did with theirs.
+
+Not verified:
+
+- Shell changes and commit links in member repositories: git still runs in
+  the workspace folder, which is outside git. Not built yet.
+- The acceptance checklists A–D of `RELEASE.md` were not run. Only Claude
+  Code was exercised in a workspace; no Mac run.
+- The desktop app does not read the marker: a member opened on its own in
+  the app gets a separate store.

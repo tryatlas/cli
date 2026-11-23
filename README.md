@@ -84,6 +84,33 @@ atlas-cli status     # what was captured, what synced, what agents remember
 `atlas-cli settings` changes any of it later on one screen: account, capture and
 memory, each agent, background sync, the local model, updates.
 
+### One folder, several repositories
+
+When a project is a folder of repositories, each with its own git:
+
+```
+acme-shop/        ← atlas-cli init here, once
+├── frontend/     (git)
+└── backend/      (git)
+```
+
+run `atlas-cli init --workspace` in `acme-shop/`. On a terminal, plain
+`atlas-cli init` asks, with "This folder only" pre-selected; a folder already
+bound alone becomes a workspace with `atlas-cli workspace on`. Agents started
+in `frontend/` or `backend/` then record into the one Project and share one
+memory, and the agent hooks are installed in every repository. A workspace is
+never made by default: it captures every repository below it. A repository
+cloned in later is part of the workspace at once; `atlas-cli workspace sync`
+hooks it. A repository with its own `atlas-cli init` is split off as its own
+Project.
+
+| command | does |
+|---|---|
+| `atlas-cli workspace` | lists the workspace's folders and which agents are hooked in each |
+| `atlas-cli workspace sync` | hooks folders added since, with the agents the workspace folder uses |
+| `atlas-cli workspace on` / `off` | turns an already bound folder into a workspace, or back |
+| `atlas-cli workspace add <folder>` / `remove <folder>` | a folder without git (or a repository deeper down) joins or leaves |
+
 ## Shared memory
 
 Every agent in the project reads and writes one memory, through the
