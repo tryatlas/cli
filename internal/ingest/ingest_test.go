@@ -107,7 +107,7 @@ func TestErrorsAndConflicts(t *testing.T) {
 
 func TestRegistryReadsGroupsAndAServerWithoutThem(t *testing.T) {
 	answer := `{"workspaces":[{"id":"g","slug":"fleet","kind":"group","parentId":null},{"id":"a","slug":"api","kind":"workspace","parentId":"g"}],"groups":true}`
-	c := server(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, answer) })
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, answer) })
 	reg, err := c.Registry(context.Background(), "org_1")
 	if err != nil || !reg.Groups {
 		t.Fatalf("%+v %v", reg, err)
@@ -143,7 +143,7 @@ func TestUpdateSendsOnlyTheGroupFieldsGiven(t *testing.T) {
 }
 
 func TestCodeOfNamesTheServersRefusal(t *testing.T) {
-	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+	c := server(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = io.WriteString(w, `{"error":{"code":"not_promotable","message":"no"}}`)
 	})

@@ -104,13 +104,24 @@ func (l *Layout) abs(p string, outOfRepo bool) string {
 	if !outOfRepo && !filepath.IsAbs(p) {
 		return filepath.Join(l.Home, filepath.FromSlash(p))
 	}
-	if c, err := Canonical(p); err == nil {
-		return c
+	return canonicalAsFar(p)
+}
+
+// canonicalAsFar spells p canonical through its deepest folder that still
+// exists: a deleted file, or a file in a deleted folder, keeps the spelling
+// of the tree it was in (/private/var/… on macOS, where /var is a link).
+func canonicalAsFar(p string) string {
+	p = filepath.Clean(p)
+	rest := ""
+	for d := p; ; d = filepath.Dir(d) {
+		if c, err := Canonical(d); err == nil {
+			return filepath.Join(c, rest)
+		}
+		if d == filepath.Dir(d) {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(d), rest)
 	}
-	if c, err := Canonical(filepath.Dir(p)); err == nil {
-		return filepath.Join(c, filepath.Base(p))
-	}
-	return filepath.Clean(p)
 }
 
 // Tags derives a session's tags from the paths it changed and the files of

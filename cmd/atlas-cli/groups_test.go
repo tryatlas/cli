@@ -93,13 +93,13 @@ func (r *fakeRegistry) install(t *testing.T) {
 // cloudWorkspace binds acme-shop as a cloud workspace whose Project was
 // registered by name, as before groups, with backend matched by its root
 // commit and frontend new.
-func cloudWorkspace(t *testing.T, groups bool) (*fakeRegistry, string, string, string) {
+func cloudWorkspace(t *testing.T, groups bool) (reg *fakeRegistry, mother, frontend string) {
 	t.Helper()
 	mother, frontend, backend := workspaceDir(t)
 	commitRepo(t, backend, "https://github.com/Acme/backend.git")
 	commitRepo(t, frontend, "https://github.com/Acme/frontend.git")
 	installFakeAuth(t, routes())
-	reg := &fakeRegistry{groups: groups, rows: []map[string]any{{"id": "ws_backend", "slug": "backend"}}}
+	reg = &fakeRegistry{groups: groups, rows: []map[string]any{{"id": "ws_backend", "slug": "backend"}}}
 	if groups {
 		reg.rows[0]["kind"], reg.rows[0]["parentId"] = "workspace", nil
 	}
@@ -114,14 +114,14 @@ func cloudWorkspace(t *testing.T, groups bool) (*fakeRegistry, string, string, s
 		t.Fatalf("the workspace was not registered: %v", reg.rows)
 	}
 	reg.changes = nil
-	return reg, mother, frontend, backend
+	return reg, mother, frontend
 }
 
 // ADR-0018: where the organisation has groups, the workspace's Project is
 // promoted to a group, a new member is created in it, and a matched one is
 // put in it only after a yes.
 func TestWorkspaceAddGroupsTheProjectsInTheCloud(t *testing.T) {
-	reg, mother, _, backend := cloudWorkspace(t, true)
+	reg, mother, _ := cloudWorkspace(t, true)
 
 	code, out, e := runCmd(t, "workspace", "add", "--all")
 	if code != 0 {
@@ -174,13 +174,12 @@ func TestWorkspaceAddGroupsTheProjectsInTheCloud(t *testing.T) {
 	if !slices.Contains(reg.changes, `PATCH ws_backend {"parentId":null}`) {
 		t.Fatalf("changes: %v", reg.changes)
 	}
-	_ = backend
 }
 
 // Where the organisation has no groups, what the CLI sends is what it sent
 // before them: no PATCH, no parentId.
 func TestWithoutGroupsNothingChangesInTheCloud(t *testing.T) {
-	reg, _, _, _ := cloudWorkspace(t, false)
+	reg, _, _ := cloudWorkspace(t, false)
 	code, out, e := runCmd(t, "workspace", "add", "--all")
 	if code != 0 {
 		t.Fatalf("add --all: %d %s %s", code, out, e)
@@ -198,7 +197,7 @@ func TestWithoutGroupsNothingChangesInTheCloud(t *testing.T) {
 // A workspace Project the server will not promote: the members are bound
 // all the same, created at the top level, and the CLI says why.
 func TestAWorkspaceThatCannotBeAGroupStillBindsItsProjects(t *testing.T) {
-	reg, _, frontend, _ := cloudWorkspace(t, true)
+	reg, _, frontend := cloudWorkspace(t, true)
 	reg.refusePromotion = true
 	code, out, e := runCmd(t, "workspace", "add", "frontend")
 	if code != 0 {
@@ -281,7 +280,7 @@ func TestAMatchedProjectIsMovedOnlyAfterAYes(t *testing.T) {
 		moved  bool
 	}{{"yes", 0, true}, {"no", 1, false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			reg, _, _, _ := cloudWorkspace(t, true)
+			reg, _, _ := cloudWorkspace(t, true)
 			oldI, oldC := interactive, chooseStep
 			t.Cleanup(func() { interactive, chooseStep = oldI, oldC })
 			interactive = func() bool { return true }

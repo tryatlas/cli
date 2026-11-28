@@ -103,6 +103,9 @@ func relMember(dir, folder string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if cd, err := Canonical(dir); err == nil {
+		dir = cd // both spelled one way (/private/var on macOS)
+	}
 	if fi, err := os.Stat(c); err != nil || !fi.IsDir() {
 		return "", fmt.Errorf("%s is not a folder", folder)
 	}
@@ -120,6 +123,9 @@ func AddFolder(dir, folder string) (bool, error) {
 	rel, err := relMember(dir, folder)
 	if err != nil {
 		return false, err
+	}
+	if cd, err := Canonical(dir); err == nil {
+		dir = cd
 	}
 	if slices.Contains(MemberFolders(dir), filepath.Join(dir, filepath.FromSlash(rel))) {
 		return false, nil

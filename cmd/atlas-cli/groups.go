@@ -213,7 +213,7 @@ func resendTags(ctx context.Context, g *cloudGroup, ws string) (int64, error) {
 	var errs []error
 	for _, dir := range append([]string{ws}, linkedMembers(ctx, ws)...) {
 		path := clistate.Path(dir, tagsMarker)
-		if b, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(b)) == sig {
+		if b, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(b)) == sig { //nolint:gosec // G304: the CLI's own state dir
 			continue
 		}
 		st, err := store.Open(dir, false)
@@ -221,7 +221,7 @@ func resendTags(ctx context.Context, g *cloudGroup, ws string) (int64, error) {
 			continue // no store: nothing was sent from it
 		}
 		n, err := st.ResyncSessions(ctx)
-		st.Close()
+		_ = st.Close()
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", dir, err))
 			continue
