@@ -14,6 +14,7 @@ import (
 
 	"github.com/tryatlas/cli/internal/capture/record"
 	"github.com/tryatlas/cli/internal/capture/store"
+	"github.com/tryatlas/cli/internal/project"
 )
 
 // The walk that links captured sessions to the commits that carried their
@@ -31,17 +32,65 @@ type Result struct {
 	Rewrites    Reconciled
 }
 
-// Link walks first-parent history from the cursor to HEAD.
+// Link walks first-parent history from the cursor to HEAD in each
+// repository whose work the store at root records: root itself, or each
+// member repository of a workspace (ADR-0017).
 func Link(ctx context.Context, st *store.Store, root string, now func() time.Time) (Result, error) {
 	var res Result
-	g := runner{dir: root}
+	for _, r := range project.Repos(root) {
+		n, err := linkRepo(ctx, st, root, r, now)
+		res.add(n)
+		if err != nil {
+			return res, err
+		}
+	}
+	return res, nil
+}
+
+// LinkRepo is Link for the one repository at dir, root itself or one of its
+// workspace's members: a member's post-commit hook links its own commits
+// only.
+func LinkRepo(ctx context.Context, st *store.Store, root, dir string, now func() time.Time) (Result, error) {
+	for _, r := range project.Repos(root) {
+		if r.Dir == dir {
+			return linkRepo(ctx, st, root, r, now)
+		}
+	}
+	return Result{}, nil
+}
+
+func (r *Result) add(o Result) {
+	r.Commits += o.Commits
+	r.Checkpoints += o.Checkpoints
+	r.Rewrites.Orphaned += o.Rewrites.Orphaned
+	r.Rewrites.Relinked += o.Rewrites.Relinked
+	r.Rewrites.Recovered += o.Rewrites.Recovered
+	r.Rewrites.Failed += o.Rewrites.Failed
+}
+
+// touchesIn are the live touches of the store at root that commits in repo
+// can carry: all of them for the store's own repository, those under a
+// workspace member's folder for that member.
+func touchesIn(ctx context.Context, st *store.Store, root string, repo project.Repo) ([]store.Touch, error) {
+	if repo.Prefix == "" {
+		return st.LiveTouches(ctx, root)
+	}
+	return st.LiveTouchesUnder(ctx, root, repo.Prefix)
+}
+
+// linkRepo walks one repository. Its cursor is keyed by the repository's
+// folder: the store's root for its own repository, one per member in a
+// workspace's store.
+func linkRepo(ctx context.Context, st *store.Store, root string, repo project.Repo, now func() time.Time) (Result, error) {
+	var res Result
+	g := runner{dir: repo.Dir}
 	if _, err := g.out(ctx, "rev-parse", "-q", "--verify", "HEAD"); err != nil {
 		return res, nil // not a repository, or unborn
 	}
 	if g.midOperation(ctx) {
 		return res, nil
 	}
-	rw, err := Reconcile(ctx, st, root, now)
+	rw, err := reconcile(ctx, st, root, repo, now)
 	if err != nil {
 		return res, err
 	}
@@ -50,16 +99,16 @@ func Link(ctx context.Context, st *store.Store, root string, now func() time.Tim
 	if err != nil {
 		return res, err
 	}
-	cur, err := st.GetCursor(ctx, root)
+	cur, err := st.GetCursor(ctx, repo.Dir)
 	if err != nil {
 		return res, err
 	}
-	touches, err := st.LiveTouches(ctx, root)
+	touches, err := touchesIn(ctx, st, root, repo)
 	if err != nil {
 		return res, err
 	}
 	if cur == nil && len(touches) == 0 {
-		return res, st.SetCursor(ctx, root, head, false, now())
+		return res, st.SetCursor(ctx, repo.Dir, head, false, now())
 	}
 	var list string
 	recovered := false
@@ -74,17 +123,17 @@ func Link(ctx context.Context, st *store.Store, root string, now func() time.Tim
 		return res, err
 	}
 	for _, sha := range strings.Fields(list) {
-		n, err := evaluate(ctx, g, st, sha, touches, now, false)
+		n, err := evaluate(ctx, g, st, sha, touches, now, false, repo.Prefix)
 		if err != nil {
 			return res, err
 		}
 		res.Commits++
 		res.Checkpoints += n
-		if err := st.SetCursor(ctx, root, sha, recovered, now()); err != nil {
+		if err := st.SetCursor(ctx, repo.Dir, sha, recovered, now()); err != nil {
 			return res, err
 		}
 		if n > 0 {
-			if touches, err = st.LiveTouches(ctx, root); err != nil {
+			if touches, err = touchesIn(ctx, st, root, repo); err != nil {
 				return res, err
 			}
 		}
@@ -101,7 +150,10 @@ type commit struct {
 // evaluate links one first-parent commit; a merge creates no checkpoint and
 // its side commits are evaluated instead. late says the touches may have been
 // recorded after the commit (LinkRange): they are consumed all the same.
-func evaluate(ctx context.Context, g runner, st *store.Store, sha string, touches []store.Touch, now func() time.Time, late bool) (int, error) {
+// prefix is a workspace member's folder ("backend/"): the touches are spelled
+// with it, the commit's paths are not, and the checkpoint keeps it, so its
+// files stay spelled from the store's root and name the member.
+func evaluate(ctx context.Context, g runner, st *store.Store, sha string, touches []store.Touch, now func() time.Time, late bool, prefix string) (int, error) {
 	c, err := g.commit(ctx, sha)
 	if err != nil {
 		return 0, err
@@ -113,7 +165,7 @@ func evaluate(ctx context.Context, g runner, st *store.Store, sha string, touche
 		}
 		total := 0
 		for _, s := range strings.Fields(side) {
-			n, err := evaluate(ctx, g, st, s, touches, now, late)
+			n, err := evaluate(ctx, g, st, s, touches, now, late, prefix)
 			if err != nil {
 				return total, err
 			}
@@ -142,10 +194,10 @@ func evaluate(ctx context.Context, g runner, st *store.Store, sha string, touche
 		var commitPaths, touchPaths []string
 		for _, ch := range changes {
 			for _, t := range bySession[sid] {
-				if !ch.matches(t.Path) || !links(ctx, g, sha, ch, t) {
+				if !ch.matches(t.Path[len(prefix):]) || !links(ctx, g, sha, ch, t) {
 					continue
 				}
-				commitPaths = append(commitPaths, ch.path)
+				commitPaths = append(commitPaths, prefix+ch.path)
 				touchPaths = append(touchPaths, t.Path)
 				break
 			}
@@ -168,6 +220,13 @@ func evaluate(ctx context.Context, g runner, st *store.Store, sha string, touche
 		}
 		for _, p := range touchPaths {
 			if err := st.ConsumeTouches(ctx, sid, p, sha, cutoff); err != nil {
+				return written, err
+			}
+		}
+		if prefix != "" {
+			// A workspace session's commit in a member tags it with the
+			// member: the session goes out again with that tag.
+			if err := st.ResyncSession(ctx, sid); err != nil {
 				return written, err
 			}
 		}
@@ -367,8 +426,27 @@ func (g runner) branch(ctx context.Context) *string {
 // when touches arrive after a commit the post-commit hook already walked (a
 // file written and committed in one shell command, or a turn delivered at
 // its end). Checkpoints are upserted, so a commit linked twice stays one.
+// For a workspace, from is the hooks' Heads: each member's commit, and each
+// member that moved is linked.
 func LinkRange(ctx context.Context, st *store.Store, root, from string, now func() time.Time) (int, error) {
-	g := runner{dir: root}
+	heads := project.SplitHeads(from)
+	total := 0
+	for _, r := range project.Repos(root) {
+		f, ok := heads[r.Prefix]
+		if !ok {
+			continue
+		}
+		n, err := linkRange(ctx, st, root, r, f, now)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+func linkRange(ctx context.Context, st *store.Store, root string, repo project.Repo, from string, now func() time.Time) (int, error) {
+	g := runner{dir: repo.Dir}
 	if from == "" || !g.isCommit(ctx, from) || g.midOperation(ctx) {
 		return 0, nil
 	}
@@ -376,19 +454,19 @@ func LinkRange(ctx context.Context, st *store.Store, root, from string, now func
 	if err != nil || list == "" {
 		return 0, err
 	}
-	touches, err := st.LiveTouches(ctx, root)
+	touches, err := touchesIn(ctx, st, root, repo)
 	if err != nil || len(touches) == 0 {
 		return 0, err
 	}
 	total := 0
 	for _, sha := range strings.Fields(list) {
-		n, err := evaluate(ctx, g, st, sha, touches, now, true)
+		n, err := evaluate(ctx, g, st, sha, touches, now, true, repo.Prefix)
 		if err != nil {
 			return total, err
 		}
 		total += n
 		if n > 0 {
-			if touches, err = st.LiveTouches(ctx, root); err != nil {
+			if touches, err = touchesIn(ctx, st, root, repo); err != nil {
 				return total, err
 			}
 		}

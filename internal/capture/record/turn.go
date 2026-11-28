@@ -306,7 +306,7 @@ func (r *Recorder) touchPaths(ctx context.Context, l *live, callID string, paths
 		} else {
 			ft.Deleted = true
 		}
-		if err := r.Store.AddFileTouch(ctx, ft, at); err != nil {
+		if err := r.addTouch(ctx, ft, at); err != nil {
 			return err
 		}
 	}

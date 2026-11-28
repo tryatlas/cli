@@ -222,13 +222,26 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			return nil
 		})
-		h.Listener.SetLinker(func(ctx context.Context) error {
-			_, err := gitlink.Link(ctx, h.Store, p.Root, time.Now)
+		h.Listener.SetLinker(func(ctx context.Context, repo string) error {
+			var err error
+			if repo == "" {
+				_, err = gitlink.Link(ctx, h.Store, p.Root, time.Now)
+			} else {
+				_, err = gitlink.LinkRepo(ctx, h.Store, p.Root, repo, time.Now)
+			}
 			return err
 		})
 		if err := hooks.DrainSpool(ctx, p.Root, h.Recorder, h.Listener.Memory); err != nil {
 			fmt.Fprintln(cmd.ErrOrStderr(), "atlas-cli: spooled hook turns:", err)
 		}
+	}
+	if p.Kind == project.KindWorkspace && p.Root == p.WorkspaceRoot {
+		if os.Getenv(daemonEnv) == "" {
+			sayNewClones(ctx, cmd.ErrOrStderr(), p.Root)
+		}
+		mctx, stopMembers := context.WithCancel(ctx)
+		defer stopMembers()
+		go drainMembers(mctx, syncClient(), p.Root) // FR-11
 	}
 	every, _ := cmd.Flags().GetDuration("import-every")
 	var im *atlasrun.Importer

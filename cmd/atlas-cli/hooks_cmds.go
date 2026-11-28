@@ -215,8 +215,10 @@ func banner(ctx context.Context, root string) string {
 	return "Atlas: capture on · " + mem + " · " + where
 }
 
-// runGitPostCommit links captured sessions to the new commit: through the
-// running listener when one holds the store, else directly.
+// runGitPostCommit links captured sessions to the new commit. The Project's
+// own store links it as before. A repository in a workspace links it into
+// the workspace's store too (ADR-0017): there the commit can carry what a
+// session started in the workspace folder changed in this repository.
 func runGitPostCommit(cmd *cobra.Command, _ []string) error {
 	ctx, cancel := context.WithTimeout(cmd.Context(), hooks.TurnEndDeadline)
 	defer cancel()
@@ -228,30 +230,51 @@ func runGitPostCommit(cmd *cobra.Command, _ []string) error {
 	if err != nil || !store.Exists(p.Root) {
 		return nil //nolint:nilerr // not an Atlas Project: silent
 	}
-	if rf := listener.ReadRunFile(p.Root); rf != nil {
-		body, _ := json.Marshal(listener.SyncRequest{Link: true})
-		if err := postControl(ctx, rf.Socket, body); err == nil {
-			return nil
-		}
-	}
-	lock, err := store.Lock(p.Root)
-	if err != nil {
-		if !errors.Is(err, store.ErrLocked) {
-			hooks.LogError(p.Root, "git", "post-commit", err)
-		}
-		return nil // the desktop app links on its own
-	}
-	defer func() { _ = lock.Release() }()
-	st, err := store.Open(p.Root, false)
-	if err != nil {
-		hooks.LogError(p.Root, "git", "post-commit", err)
-		return nil
-	}
-	defer st.Close()
-	if _, err := gitlink.Link(ctx, st, p.Root, time.Now); err != nil {
-		hooks.LogError(p.Root, "git", "post-commit", err)
+	repo := project.ScopeRoot(ctx, cwd) // the repository that committed
+	switch p.Kind {
+	case project.KindWorkspace:
+		linkCommit(ctx, p.Root, repo) // an unbound member: its own commits only
+	case project.KindMember:
+		linkCommit(ctx, p.Root, "")
+		linkCommit(ctx, p.WorkspaceRoot, repo)
+	default:
+		linkCommit(ctx, p.Root, "")
 	}
 	return nil
+}
+
+// linkCommit links new commits into the store at root: those of repo, or of
+// all its repositories when repo is "". Through the listener when one holds
+// the store, else directly; a store another writer holds is left to it.
+func linkCommit(ctx context.Context, root, repo string) {
+	if rf := listener.ReadRunFile(root); rf != nil {
+		body, _ := json.Marshal(listener.SyncRequest{Link: true, Repo: repo})
+		if err := postControl(ctx, rf.Socket, body); err == nil {
+			return
+		}
+	}
+	lock, err := store.Lock(root)
+	if err != nil {
+		if !errors.Is(err, store.ErrLocked) {
+			hooks.LogError(root, "git", "post-commit", err)
+		}
+		return // the desktop app links on its own
+	}
+	defer func() { _ = lock.Release() }()
+	st, err := store.Open(root, false)
+	if err != nil {
+		hooks.LogError(root, "git", "post-commit", err)
+		return
+	}
+	defer st.Close()
+	if repo == "" {
+		_, err = gitlink.Link(ctx, st, root, time.Now)
+	} else {
+		_, err = gitlink.LinkRepo(ctx, st, root, repo, time.Now)
+	}
+	if err != nil {
+		hooks.LogError(root, "git", "post-commit", err)
+	}
 }
 
 // drainOutput is a sink for hook commands that must print nothing.

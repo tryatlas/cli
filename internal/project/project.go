@@ -17,12 +17,43 @@ import (
 // ErrNotInitialised means no binding was found from the cwd up to the scope root.
 var ErrNotInitialised = errors.New("this folder is not an Atlas Project; run atlas-cli init")
 
+// Kind is what a bound folder is.
+type Kind int
+
+const (
+	// KindPlain is a folder bound on its own.
+	KindPlain Kind = iota
+	// KindWorkspace is a folder of repositories bound once (ADR-0015).
+	KindWorkspace
+	// KindMember is a Project inside a workspace: bound on its own, with
+	// its own store, and linked to the workspace by its marker (ADR-0016).
+	KindMember
+)
+
+// String names the kind: project, workspace or member.
+func (k Kind) String() string {
+	switch k {
+	case KindWorkspace:
+		return "workspace"
+	case KindMember:
+		return "member"
+	}
+	return "project"
+}
+
 // Project is a bound folder as seen from a working directory.
 type Project struct {
 	Root      string // canonical launch dir holding .atlas/sessions.db (capture's key)
-	ScopeRoot string // canonical repository root (shared memory's key); the workspace folder in a workspace
+	ScopeRoot string // canonical repository root (shared memory's key); the workspace folder for a workspace and its members
 	Cwd       string // canonical directory the lookup started from
-	Workspace bool   // Root is a folder of repositories bound once (ADR-0015)
+	Kind      Kind
+	// WorkspaceRoot is the workspace folder: Root for a workspace, the
+	// folder a member is linked to, "" for a plain Project.
+	WorkspaceRoot string
+	// Broken says why a folder's link to a workspace did not hold (the
+	// folder moved, the workspace was unbound, another organisation). The
+	// folder is then a plain Project. "" when there is nothing to say.
+	Broken string
 }
 
 // Canonical spells a path the one way the desktop does: absolute, symlinks
@@ -91,7 +122,8 @@ func ScopeRoot(ctx context.Context, dir string) string {
 
 // Discover finds the Project for cwd: the nearest directory from cwd upward
 // that holds .atlas/sessions.db with a binding row, stopping at the scope
-// root (ADR-0007). Nested bindings resolve to the nearest. Past the scope
+// root (ADR-0007). Nested bindings resolve to the nearest; a member
+// Project's link to its workspace is followed (ADR-0016). Past the scope
 // root only a workspace binding counts (ADR-0015): a stray binding in a
 // parent folder never captures an unrelated repository.
 func Discover(ctx context.Context, cwd string) (*Project, error) {
@@ -101,20 +133,34 @@ func Discover(ctx context.Context, cwd string) (*Project, error) {
 	}
 	scope := ScopeRoot(ctx, start)
 	for dir := start; ; dir = filepath.Dir(dir) {
-		if bound(ctx, dir) {
-			if IsWorkspace(dir) {
-				return &Project{Root: dir, ScopeRoot: dir, Cwd: start, Workspace: true}, nil
-			}
-			return &Project{Root: dir, ScopeRoot: scope, Cwd: start}, nil
+		if b := bindingAt(ctx, dir); b != nil {
+			return describe(ctx, dir, scope, start, b), nil
 		}
 		if dir == scope || dir == filepath.Dir(dir) || !within(dir, scope) {
 			break
 		}
 	}
 	if ws, ok := workspaceAbove(ctx, scope); ok {
-		return &Project{Root: ws, ScopeRoot: ws, Cwd: start, Workspace: true}, nil
+		return &Project{Root: ws, ScopeRoot: ws, Cwd: start, Kind: KindWorkspace, WorkspaceRoot: ws}, nil
 	}
 	return nil, ErrNotInitialised
+}
+
+// describe is the Project bound at dir: a workspace; a member, when its link
+// holds; else a plain Project, which says why a link did not hold.
+func describe(ctx context.Context, dir, scope, start string, b *store.Binding) *Project {
+	m := readMarker(dir)
+	switch {
+	case m.Workspace:
+		return &Project{Root: dir, ScopeRoot: dir, Cwd: start, Kind: KindWorkspace, WorkspaceRoot: dir}
+	case m.MemberOf != "":
+		ws, why := follow(ctx, dir, m.MemberOf, b)
+		if why == "" {
+			return &Project{Root: dir, ScopeRoot: ws, Cwd: start, Kind: KindMember, WorkspaceRoot: ws}
+		}
+		return &Project{Root: dir, ScopeRoot: scope, Cwd: start, Broken: why}
+	}
+	return &Project{Root: dir, ScopeRoot: scope, Cwd: start}
 }
 
 // within reports whether dir is scope or below it.
@@ -123,17 +169,23 @@ func within(dir, scope string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func bound(ctx context.Context, dir string) bool {
+func bound(ctx context.Context, dir string) bool { return bindingAt(ctx, dir) != nil }
+
+// bindingAt is dir's binding row, or nil when dir is not bound.
+func bindingAt(ctx context.Context, dir string) *store.Binding {
 	if !store.Exists(dir) {
-		return false
+		return nil
 	}
 	s, err := store.Open(dir, false)
 	if err != nil {
-		return false
+		return nil
 	}
 	defer s.Close()
 	b, err := s.Binding(ctx)
-	return err == nil && b != nil
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // ── Git fingerprint ──────────────────────────────────────────────────────────

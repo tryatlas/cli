@@ -66,6 +66,10 @@ type SyncRequest struct {
 	Retry  bool `json:"retry"`
 	Import bool `json:"import"` // also import native-UI sessions now
 	Link   bool `json:"link"`   // also link captured sessions to new commits now
+	// Repo is the repository that committed, one of a workspace's members
+	// (ADR-0017): only its commits are linked. "" links every repository
+	// of the Project.
+	Repo string `json:"repo,omitempty"`
 }
 
 // Importer is the native-session import loop of atlas-cli serve.
@@ -77,8 +81,9 @@ type Importer interface {
 // POST /hook, decoded by the owner of the recorder.
 type HookSink func(ctx context.Context, body []byte) error
 
-// Linker links captured sessions to commits on request.
-type Linker func(ctx context.Context) error
+// Linker links captured sessions to commits on request: those in repo, or
+// in every repository of the Project when repo is "".
+type Linker func(ctx context.Context, repo string) error
 
 // SyncAnswer is its answer.
 type SyncAnswer struct {
@@ -215,7 +220,7 @@ func syncHandler(s Syncer, im, lk *atomic.Value) http.HandlerFunc {
 			v.ImportNow()
 		}
 		if v, ok := lk.Load().(Linker); req.Link && ok {
-			if err := v(r.Context()); err != nil {
+			if err := v(r.Context(), req.Repo); err != nil {
 				http.Error(w, "link failed", http.StatusInternalServerError)
 				return
 			}

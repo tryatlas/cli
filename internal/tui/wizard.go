@@ -356,3 +356,107 @@ func stepMultiWith(s Step, question, allLabel string, choices []Choice, checked 
 	}
 	return fm.picked(), nil
 }
+
+// ── Text ─────────────────────────────────────────────────────────────────────
+
+// stepInput asks for a line of text, filled in with a value to keep or edit.
+// check, when set, refuses a value with a reason shown under the field.
+type stepInput struct {
+	step     Step
+	question string
+	hint     string
+	value    []rune
+	check    func(string) string
+	problem  string
+	done     bool
+	ok       bool
+	width    int
+}
+
+func (m stepInput) Init() tea.Cmd { return nil }
+
+func (m stepInput) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		return m, nil
+	case tea.PasteMsg:
+		m.value = append(m.value, []rune(strings.ReplaceAll(msg.Content, "\n", " "))...)
+		m.problem = ""
+		return m, nil
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "enter":
+			v := strings.TrimSpace(string(m.value))
+			if v == "" {
+				m.problem = "a name is needed"
+				return m, nil
+			}
+			if m.check != nil {
+				if p := m.check(v); p != "" {
+					m.problem = p
+					return m, nil
+				}
+			}
+			m.value, m.done, m.ok = []rune(v), true, true
+			return m, tea.Quit
+		case "esc", "ctrl+c":
+			m.done = true
+			return m, tea.Quit
+		case "backspace", "ctrl+h":
+			if len(m.value) > 0 {
+				m.value = m.value[:len(m.value)-1]
+			}
+			m.problem = ""
+		case "ctrl+u":
+			m.value, m.problem = nil, ""
+		default:
+			if msg.Text != "" {
+				m.value = append(m.value, []rune(msg.Text)...)
+				m.problem = ""
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m stepInput) View() tea.View {
+	if m.done {
+		if !m.ok {
+			return tea.NewView(m.step.cancelled() + "\n")
+		}
+		return tea.NewView(m.step.summary(string(m.value)) + "\n")
+	}
+	w := frameWidth(m.width)
+	var b strings.Builder
+	b.WriteString(m.step.header(w) + "\n")
+	b.WriteString(Default.Bold.Render(m.question) + "\n\n")
+	b.WriteString(Default.Tree.Render("▸") + " " + Default.Highlight.Render(" "+string(m.value)+"▏") + "\n")
+	switch {
+	case m.problem != "":
+		b.WriteString("  " + Default.Error.Render(m.problem) + "\n")
+	case m.hint != "":
+		b.WriteString("  " + Default.Faint.Render(m.hint) + "\n")
+	}
+	b.WriteString("\n" + footer(w, "ENTER", "confirm", "CTRL+U", "clear", "ESC", "cancel"))
+	return tea.NewView(b.String())
+}
+
+// StepInput asks for a line of text, starting from initial; check refuses a
+// value with the reason to show. It returns the trimmed text, or
+// ErrCancelled.
+func StepInput(s Step, question, hint, initial string, check func(string) string) (string, error) {
+	return stepInputWith(s, question, hint, initial, check, os.Stdin, os.Stdout)
+}
+
+func stepInputWith(s Step, question, hint, initial string, check func(string) string, in io.Reader, out io.Writer) (string, error) {
+	m := stepInput{step: s, question: question, hint: hint, value: []rune(initial), check: check}
+	final, err := tea.NewProgram(m, tea.WithInput(in), tea.WithOutput(out)).Run()
+	if err != nil {
+		return "", err
+	}
+	if fm := final.(stepInput); fm.ok {
+		return string(fm.value), nil
+	}
+	return "", ErrCancelled
+}

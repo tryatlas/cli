@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas · Workspaces preview</title>
+<style>
+  :root {
+    --bg: #262626;
+    --rail: #1f1f1f;
+    --card: #2c2c2c;
+    --card-hi: #323232;
+    --inner: #262626;
+    --line: #3b3b3b;
+    --line-soft: #333;
+    --text: #ececec;
+    --muted: #9a9a9a;
+    --faint: #6f6f6f;
+    --accent: #e8772e;
+    --cream: #f5e3b3;
+    --cream-text: #2a2418;
+    --green: #9ac16b;
+    --chip: #3a3a3a;
+    --ws: #c9a2f0;
+    --mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: #161616; color: var(--text); font: 14px/1.4 var(--sans); }
+
+  /* preview switcher (not part of the product) */
+  .preview-bar {
+    position: fixed; z-index: 10; left: 50%; bottom: 18px; transform: translateX(-50%);
+    display: flex; gap: 4px; padding: 5px; border-radius: 12px;
+    background: #0e0e0e; border: 1px solid #444; box-shadow: 0 8px 30px #0008;
+  }
+  .preview-bar span { color: var(--faint); font-size: 12px; padding: 7px 8px 0 6px; }
+  .preview-bar button {
+    background: none; border: 0; color: var(--muted); font: 13px var(--sans);
+    padding: 7px 12px; border-radius: 8px; cursor: pointer;
+  }
+  .preview-bar button.on { background: var(--cream); color: var(--cream-text); font-weight: 600; }
+
+  .app { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; margin: 6px; border-radius: 10px; overflow: hidden; background: var(--bg); }
+
+  /* sidebar */
+  .rail { background: var(--rail); padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; border-right: 1px solid #2a2a2a; }
+  .org { display: flex; align-items: center; gap: 10px; font-weight: 600; padding: 4px 6px 14px; }
+  .org .logo { font-weight: 800; letter-spacing: -2px; font-style: italic; }
+  .org .chev { margin-left: auto; color: var(--faint); }
+  .search { display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--muted); }
+  .kbd { margin-left: auto; display: flex; gap: 3px; }
+  .kbd b { font: 500 11px var(--sans); background: #333; border-radius: 4px; padding: 2px 5px; color: #ccc; }
+  .nav { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: #d6d6d6; }
+  .nav.on { background: #333; color: #fff; font-weight: 600; }
+  .nav i { width: 16px; text-align: center; font-style: normal; color: var(--muted); }
+  .spacer { flex: 1; }
+  .me { display: flex; align-items: center; gap: 10px; padding: 8px; }
+  .me .av { width: 24px; height: 24px; border-radius: 50%; background: linear-gradient(135deg, #d9534f, #f0ad4e); }
+
+  main { padding: 34px 48px 90px; overflow: auto; }
+  .page { max-width: 1380px; margin: 0 auto; }
+  .view { display: none; }
+  .view.on { display: block; }
+
+  /* header */
+  .head { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+  .head h1 { font-size: 22px; margin: 0; }
+  .head .count { color: var(--muted); font-size: 13px; }
+  .head .info { color: var(--faint); border: 1px solid var(--faint); border-radius: 50%; width: 15px; height: 15px; font-size: 10px; display: grid; place-items: center; }
+  .new { margin-left: auto; position: relative; }
+  .btn-cream { background: var(--cream); color: var(--cream-text); border: 0; border-radius: 12px; padding: 10px 16px; font: 600 14px var(--sans); cursor: pointer; }
+  .menu { position: absolute; right: 0; top: 46px; background: #1d1d1d; border: 1px solid var(--line); border-radius: 10px; padding: 6px; width: 250px; display: none; z-index: 5; box-shadow: 0 10px 30px #0007; }
+  .new.open .menu { display: block; }
+  .menu div { padding: 9px 10px; border-radius: 7px; cursor: pointer; }
+  .menu div:hover { background: #2c2c2c; }
+  .menu small { display: block; color: var(--muted); font-size: 12px; }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 22px; }
+  .sbox { flex: 1; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; color: var(--muted); background: #222; }
+  .seg { display: flex; background: #222; border: 1px solid var(--line); border-radius: 12px; padding: 3px; }
+  .seg button { background: none; border: 0; color: #cfcfcf; padding: 6px 12px; border-radius: 9px; font: 500 14px var(--sans); cursor: pointer; }
+  .seg button.on { background: #3a3a3a; color: #fff; font-weight: 600; }
+  .seg .new-tag { font-size: 10px; color: var(--ws); margin-left: 4px; }
+  .sort { border: 1px solid var(--line); background: #2a2a2a; border-radius: 12px; padding: 8px 14px; color: #ddd; }
+
+  /* cards */
+  .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px 14px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: border-color .15s, background .15s; }
+  .card:hover { border-color: #555; background: var(--card-hi); }
+  .card-top { display: flex; gap: 12px; align-items: flex-start; }
+  .art { width: 40px; height: 40px; border-radius: 9px; flex: none; display: grid; place-items: center; background: #3a3a3a; }
+  .title { font-weight: 600; font-size: 15px; }
+  .handle { display: inline-block; font: 13px var(--mono); background: var(--chip); border-radius: 5px; padding: 2px 7px; margin-top: 5px; color: #ddd; }
+  .dots { margin-left: auto; color: var(--faint); letter-spacing: 1px; }
+  .url { font: 13px var(--mono); color: #cfcfcf; }
+  .spark { height: 34px; width: 100%; display: block; }
+  .row { display: flex; justify-content: space-between; color: var(--muted); font-size: 12.5px; }
+  .ok { color: var(--green); }
+  .sync-spin { width: 13px; height: 13px; border: 1.5px dashed var(--muted); border-radius: 50%; display: inline-block; }
+
+  /* workspace card */
+  .card.ws { grid-column: span 2; border-color: #4a4458; background: linear-gradient(180deg, #2f2c35 0%, var(--card) 55%); }
+  .card.ws:hover { border-color: #6c6280; }
+  .badge { font: 600 10.5px var(--sans); letter-spacing: .06em; color: var(--ws); border: 1px solid #5d5070; background: #3a3247; border-radius: 6px; padding: 3px 7px; text-transform: uppercase; }
+  .members { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .mini { background: var(--inner); border: 1px solid var(--line-soft); border-radius: 9px; padding: 9px 11px; display: flex; flex-direction: column; gap: 5px; }
+  .mini:hover { border-color: #555; }
+  .mini .t { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+  .mini .t .art { width: 22px; height: 22px; border-radius: 5px; }
+  .mini .handle { margin: 0; font-size: 11.5px; padding: 1px 5px; }
+  .mini .spark { height: 20px; }
+  .mini .row { font-size: 11.5px; }
+  .xp { color: var(--ws); }
+
+  /* list view */
+  table.list { width: 100%; border-collapse: collapse; }
+  .list th { text-align: left; font: 600 11.5px var(--sans); letter-spacing: .05em; color: var(--faint); text-transform: uppercase; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .list td { padding: 11px 12px; border-bottom: 1px solid #303030; color: #ddd; }
+  .list tr:hover td { background: #2b2b2b; }
+  .list .name { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+  .list .name .art { width: 24px; height: 24px; border-radius: 6px; }
+  .list .tree { color: var(--faint); font-family: var(--mono); width: 22px; display: inline-block; }
+  .list .kind-ws { color: var(--ws); font-weight: 600; }
+  .list .muted { color: var(--muted); }
+  .caret { color: var(--muted); width: 14px; display: inline-block; cursor: pointer; }
+
+  /* detail pages */
+  .crumb { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+  .crumb a { color: var(--muted); text-decoration: none; cursor: pointer; }
+  .crumb a:hover { color: #fff; }
+  .crumb b { color: #fff; font-weight: 600; }
+  .dhead { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
+  .dhead .art { width: 46px; height: 46px; }
+  .dhead h1 { margin: 0; font-size: 22px; }
+  .tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 22px; }
+  .tabs div { padding: 10px 0; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; }
+  .tabs div.on { color: #fff; border-color: var(--cream); font-weight: 600; }
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; }
+  .pill { border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; color: #ddd; background: #2a2a2a; font-size: 13px; }
+  .day { color: var(--faint); font: 600 11.5px var(--sans); text-transform: uppercase; letter-spacing: .05em; margin: 18px 0 8px; }
+  .sess { display: grid; grid-template-columns: 14px 1fr auto; gap: 12px; align-items: start; padding: 13px 14px; border: 1px solid var(--line-soft); border-radius: 10px; background: #2a2a2a; margin-bottom: 8px; }
+  .sess .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); margin-top: 6px; }
+  .sess .dot.idle { background: #666; }
+  .sess .st { font-weight: 600; }
+  .sess .meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
+  .sess .part { color: var(--muted); font-size: 12.5px; margin-top: 7px; padding-left: 10px; border-left: 2px solid #4a4458; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; max-width: 360px; }
+  .chip { font-size: 12px; border-radius: 6px; padding: 3px 8px; background: var(--chip); color: #ddd; white-space: nowrap; }
+  .chip.home { background: #3a3247; color: #e3d0f7; }
+  .chip.edit { background: #3b3326; color: #f2c88f; }
+  .chip.commit { background: #2b3824; color: #b9da92; font-family: var(--mono); }
+  .chip.from { background: none; border: 1px dashed #5d5070; color: var(--ws); }
+  .legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; margin: 26px 0 0; padding-top: 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .note { margin-top: 26px; border: 1px dashed #4a4458; border-radius: 10px; padding: 12px 14px; color: var(--muted); font-size: 13px; background: #24222a; }
+  .note b { color: var(--ws); }
+  .split { display: grid; grid-template-columns: 1fr 300px; gap: 24px; }
+  .side { display: flex; flex-direction: column; gap: 12px; }
+  .side .card { cursor: default; }
+  .stat { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); }
+  .stat b { color: #fff; }
+</style>
+</head>
+<body>
+
+<div class="preview-bar" id="previewBar">
+  <span>PREVIEW</span>
+  <button data-go="grid" class="on">Projects · grid</button>
+  <button data-go="list">Projects · list</button>
+  <button data-go="workspace">Workspace page</button>
+  <button data-go="member">Project in a workspace</button>
+</div>
+
+<div class="app">
+  <!-- Sidebar (unchanged) -->
+  <aside class="rail">
+    <div class="org"><span class="logo">///</span> Atlas org <span class="chev">⌃⌄</span></div>
+    <div class="search">⌕ Search <span class="kbd"><b>Ctrl</b><b>K</b></span></div>
+    <div class="nav" style="margin-top:6px"><i>///</i> Ask Atlas <span class="kbd" style="margin-left:auto"><b>Ctrl</b><b>J</b></span></div>
+    <div style="height:18px"></div>
+    <div class="nav"><i>⌂</i> Home</div>
+    <div class="nav"><i>▭</i> Inbox</div>
+    <div class="nav"><i>☰</i> Timeline</div>
+    <div class="nav on" data-go="grid" style="cursor:pointer"><i>▦</i> Projects</div>
+    <div class="nav"><i>◫</i> Chat</div>
+    <div class="nav"><i>➤</i> Agent</div>
+    <div class="spacer"></div>
+    <div class="nav"><i>⚙</i> Settings</div>
+    <div class="me"><span class="av"></span> Ukay Khing Marma <span style="margin-left:auto;color:var(--faint)">‹</span></div>
+  </aside>
+
+  <main><div class="page">
+
+    <!-- ===================== PROJECTS: GRID ===================== -->
+    <section class="view on" id="v-grid">
+      <div class="head">
+        <h1>Projects</h1><span class="count">9 · 1 workspace</span><span class="info">i</span>
+        <div class="new" id="newMenu">
+          <button class="btn-cream" onclick="this.parentElement.classList.toggle('open')">＋ New ▾</button>
+          <div class="menu">
+            <div>New project<small>One repository, one timeline</small></div>
+            <div>New workspace<small>A folder of repositories, bound once</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <div class="sbox">⌕ Search projects</div>
+        <div class="seg"><button class="on">All</button><button>Mine</button><button>Restricted</button><button>Workspaces<span class="new-tag">NEW</span></button></div>
+        <div class="sort">Sort: Recent ⌄</div>
+        <div class="seg"><button class="on" data-go="grid">▦</button><button data-go="list">☰</button></div>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+
+    <!-- ===================== PROJECTS: LIST ===================== -->
+    <section class="view" id="v-list">
+      <div class="head"><h1>Projects</h1><span class="count">9 · 1 workspace</span><span class="info">i</span>
+        <div class="new"><button class="btn-cream">＋ New ▾</button></div></div>
+      <div class="toolbar">
+        <div class="sbox">⌕ Search projects</div>
+        <div class="seg"><button class="on">All</button><button>Mine</button><button>Restricted</button><button>Workspaces<span class="new-tag">NEW</span></button></div>
+        <div class="sort">Sort: Recent ⌄</div>
+        <div class="seg"><button data-go="grid">▦</button><button class="on" data-go="list">☰</button></div>
+      </div>
+      <table class="list" id="list">
+        <thead><tr><th>Name</th><th>Kind</th><th>This week</th><th>Timelines</th><th>Synced</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <!-- ===================== WORKSPACE PAGE ===================== -->
+    <section class="view" id="v-workspace">
+      <div class="crumb"><a data-go="grid">Projects</a> › <b>atlas-platform</b></div>
+      <div class="dhead">
+        <div class="art" id="wsArt"></div>
+        <div><h1>atlas-platform <span class="badge" style="vertical-align:middle;margin-left:6px">Workspace</span></h1>
+          <span class="handle">wp-40</span></div>
+        <span class="dots" style="font-size:18px">···</span>
+      </div>
+      <div class="tabs"><div>Overview</div><div class="on">Timeline</div><div>Projects <span class="chip" style="font-size:11px;padding:1px 6px">3</span></div><div>Settings</div></div>
+      <div class="split">
+        <div>
+          <div class="filters"><span class="pill">Project: All ⌄</span><span class="pill">People ⌄</span><span class="pill">Agent ⌄</span><span class="pill">When ⌄</span><span class="pill">☐ Changed several projects</span></div>
+          <div class="day">Today</div>
+          <div class="sess"><span class="dot"></span>
+            <div><div class="st">add user API + form</div><div class="meta">claude · Ukay · 12m ago · 38 messages</div></div>
+            <div class="chips"><span class="chip home">🏠 atlas-platform</span><span class="chip edit">✏️ server</span><span class="chip edit">✏️ atlas-cli</span><span class="chip commit">⎇ server a1b2c3</span></div></div>
+          <div class="sess"><span class="dot"></span>
+            <div><div class="st">fix login screen</div><div class="meta">codex · Ukay · 1h ago · 12 messages</div></div>
+            <div class="chips"><span class="chip home">🏠 atlas-mobile</span></div></div>
+          <div class="sess"><span class="dot idle"></span>
+            <div><div class="st">bump shared API types everywhere</div><div class="meta">claude · Adib · 3h ago · 54 messages</div></div>
+            <div class="chips"><span class="chip home">🏠 server</span><span class="chip edit">✏️ atlas-cli</span><span class="chip edit">✏️ atlas-mobile</span></div></div>
+          <div class="day">Yesterday</div>
+          <div class="sess"><span class="dot idle"></span>
+            <div><div class="st">release pipeline</div><div class="meta">claude · Ukay · 1d ago · 21 messages</div></div>
+            <div class="chips"><span class="chip home">🏠 server</span><span class="chip commit">⎇ 9f3e21</span></div></div>
+          <div class="sess"><span class="dot idle"></span>
+            <div><div class="st">plan the workspace feature</div><div class="meta">claude · Ukay · 1d ago · 9 messages</div></div>
+            <div class="chips"><span class="chip home">🏠 atlas-platform</span></div></div>
+          <div class="legend"><span><span class="chip home">🏠</span> started in</span><span><span class="chip edit">✏️</span> changed files in</span><span><span class="chip commit">⎇</span> commit linked</span></div>
+        </div>
+        <div class="side">
+          <div class="card"><div class="title">This week</div>
+            <svg class="spark" viewBox="0 0 300 34" preserveAspectRatio="none"><polyline fill="none" stroke="#e8772e" stroke-width="1.6" points="0,30 30,8 55,28 90,26 120,14 150,28 180,22 210,29 240,10 270,27 300,26"/></svg>
+            <div class="stat">Sessions <b>6</b></div><div class="stat">Across projects <b class="xp">2</b></div><div class="stat">Commits linked <b>3</b></div></div>
+          <div class="card"><div class="title">Projects</div>
+            <div class="stat"><span>▪ server</span><b>4</b></div>
+            <div class="stat"><span>▪ atlas-cli</span><b>2</b></div>
+            <div class="stat"><span>▪ atlas-mobile</span><b>1</b></div>
+            <div class="stat"><span>▪ workspace folder</span><b>2</b></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== MEMBER PROJECT PAGE ===================== -->
+    <section class="view" id="v-member">
+      <div class="crumb"><a data-go="grid">Projects</a> › <a data-go="workspace">atlas-platform</a> › <b>server</b></div>
+      <div class="dhead">
+        <div class="art" id="memberArt"></div>
+        <div><h1>server</h1><span class="handle">wp-21</span></div>
+        <span class="url" style="margin-left:14px">github.com/tryatlas/server</span>
+        <span class="dots" style="font-size:18px">···</span>
+      </div>
+      <div class="tabs"><div>Overview</div><div class="on">Timeline</div><div>Settings</div></div>
+      <div class="filters"><span class="pill">People ⌄</span><span class="pill">Agent ⌄</span><span class="pill">When ⌄</span><span class="pill">☑ Include sessions from the workspace</span></div>
+      <div class="day">Today</div>
+      <div class="sess"><span class="dot"></span>
+        <div><div class="st">add user API + form</div><div class="meta">claude · Ukay · 12m ago</div>
+          <div class="part">Only the server part: 4 tool calls · 2 files · commit a1b2c3</div></div>
+        <div class="chips"><span class="chip from">from atlas-platform ↗</span><span class="chip edit">✏️ server</span><span class="chip commit">⎇ a1b2c3</span></div></div>
+      <div class="sess"><span class="dot idle"></span>
+        <div><div class="st">bump shared API types everywhere</div><div class="meta">claude · Adib · 3h ago</div></div>
+        <div class="chips"><span class="chip home">🏠 server</span><span class="chip edit">✏️ atlas-cli</span><span class="chip edit">✏️ atlas-mobile</span></div></div>
+      <div class="day">Yesterday</div>
+      <div class="sess"><span class="dot idle"></span>
+        <div><div class="st">release pipeline</div><div class="meta">claude · Ukay · 1d ago</div></div>
+        <div class="chips"><span class="chip home">🏠 server</span><span class="chip commit">⎇ 9f3e21</span></div></div>
+      <div class="note"><b>Why is "add user API + form" here?</b> It started in the workspace folder (atlas-platform), but it changed files in server, so it is tagged with server. Opening it goes to its home, atlas-platform. Tags never grant access: if you can't read atlas-platform, it isn't listed.</div>
+    </section>
+
+  </div></main>
+</div>
+
+<script>
+  // ---------- tiny art + sparkline helpers ----------
+  const ART = {
+    green:  ['#4e6b3f', '#9ac16b'], pink: ['#5a3443', '#e49ab7'], sage: ['#3e5240', '#a9c79a'],
+    rose:   ['#4c3440', '#d58aa6'], lime: ['#41502f', '#b6d47d'], orange: ['#5a3a22', '#f08a3c'],
+    teal:   ['#344846', '#a7c4bd'], amber: ['#57381f', '#f3974a'], olive: ['#4a4a24', '#d7cf5e'],
+    violet: ['#3e3352', '#c9a2f0'],
+  };
+  function art(kind, size = 40) {
+    const [bg, fg] = ART[kind];
+    return `<svg width="${size}" height="${size}" viewBox="0 0 40 40"><rect width="40" height="40" rx="9" fill="${bg}"/>
+      <path d="M10 10h9v9h-9zM21 21h9v9h-9z" fill="${fg}"/><path d="M21 10h9v9z" fill="${fg}" opacity=".6"/></svg>`;
+  }
+  function spark(points, h = 34) {
+    if (!points) return `<svg class="spark" viewBox="0 0 300 ${h}" preserveAspectRatio="none"><line x1="0" y1="${h - 3}" x2="300" y2="${h - 3}" stroke="#666" stroke-width="1.6"/></svg>`;
+    const step = 300 / (points.length - 1);
+    const pts = points.map((v, i) => `${(i * step).toFixed(1)},${(h - 3 - v * (h - 8)).toFixed(1)}`).join(' ');
+    return `<svg class="spark" viewBox="0 0 300 ${h}" preserveAspectRatio="none"><polyline fill="none" stroke="#e8772e" stroke-width="1.6" points="${pts}"/></svg>`;
+  }
+
+  // ---------- data (example; member projects reuse real cards) ----------
+  const members = [
+    { name: 'server', wp: 21, art: 'green', week: '4 this week', tl: 8, spark: [0, .9, 0, .05, .1, .6, .1, .3, 0, .4, .1, .2, 0] },
+    { name: 'atlas-cli', wp: 16, art: 'amber', week: 'Quiet', tl: 4 },
+    { name: 'atlas-mobile', wp: 13, art: 'olive', week: 'Quiet', tl: 11 },
+  ];
+  const projects = [
+    { name: 'mowi-erp', wp: 31, art: 'pink', url: 'github.com/tryatlas/mowi-erp', week: '29 this week', tl: 29, synced: 'Synced 1d ago', spark: [0, 0, 0, 0, 0, 0, 0, .4, 1, .1, 0] },
+    { name: 'atlas', wp: 8, art: 'sage', url: 'github.com/pacifio/atlas', week: '4 this week', tl: 608, synced: 'Synced 1d ago', spark: [0, .6, 0, 0, 0, 0, 0, 0, 1, 0, 0] },
+    { name: 'sim-web-docs-site', wp: 30, art: 'rose', url: 'github.com/tryatlas/sim-deskline', week: 'Quiet this week', tl: 0, synced: 'Not synced yet', none: true },
+    { name: 'Tollgate', wp: 29, art: 'lime', url: 'github.com/tryatlas/tollgate-api', week: '9 this week', tl: 9, synced: 'Synced 3d ago', spark: [0, 0, 0, 0, 1, 0, 0, 0, 0] },
+    { name: 'standards', wp: 9, art: 'orange', url: 'github.com/pacifio/standards', week: 'Quiet this week', tl: 15, synced: 'Synced 9d ago' },
+    { name: 'docs-atlas', wp: 12, art: 'teal', url: 'github.com/uzayer/docs-atlas', week: 'Quiet this week', tl: 8, synced: 'Synced 23d ago' },
+  ];
+
+  // ---------- grid ----------
+  const wsCard = `
+    <div class="card ws" data-go="workspace">
+      <div class="card-top">
+        <div class="art">${art('violet')}</div>
+        <div><div class="title">atlas-platform <span class="badge" style="margin-left:6px">Workspace · 3 projects</span></div>
+          <span class="handle">wp-40</span></div>
+        <span class="dots">···</span>
+      </div>
+      <div class="members">
+        ${members.map(m => `
+          <div class="mini" data-go="member" onclick="event.stopPropagation(); go('member')">
+            <div class="t"><span class="art">${art(m.art, 22)}</span>${m.name}<span class="handle" style="margin-left:auto">wp-${m.wp}</span></div>
+            ${spark(m.spark, 20)}
+            <div class="row"><span>${m.week}</span><span>${m.tl} timelines</span></div>
+          </div>`).join('')}
+      </div>
+      ${spark([.1, .9, .1, .2, .3, .7, .2, .4, .1, .8, .2, .3, .1, .2, .5, .1])}
+      <div class="row"><span>6 this week · <span class="xp">2 across projects</span></span><span>25 timelines</span></div>
+      <div class="row"><span>Synced 31m ago</span><span class="sync-spin"></span></div>
+    </div>`;
+
+  function card(p) {
+    return `
+      <div class="card">
+        <div class="card-top"><div class="art">${art(p.art)}</div>
+          <div><div class="title">${p.name}</div><span class="handle">wp-${p.wp}</span></div><span class="dots">···</span></div>
+        <div class="url">${p.url}</div>
+        ${spark(p.spark)}
+        <div class="row"><span>${p.week}</span><span>${p.tl} timelines</span></div>
+        <div class="row"><span>${p.synced}</span>${p.none ? '' : '<span class="ok">✓✓</span>'}</div>
+      </div>`;
+  }
+  document.getElementById('grid').innerHTML = wsCard + projects.map(card).join('');
+
+  // ---------- list ----------
+  const rows = [
+    `<tr data-go="workspace"><td><div class="name"><span class="caret">▾</span><span class="art">${art('violet', 24)}</span>atlas-platform <span class="handle" style="margin:0">wp-40</span></div></td>
+      <td class="kind-ws">Workspace</td><td>6 <span class="xp">(2 across)</span></td><td>25</td><td class="muted">31m ago</td></tr>`,
+    ...members.map((m, i) => `<tr data-go="member"><td><div class="name"><span class="caret"></span><span class="tree">${i === members.length - 1 ? '└' : '├'}</span><span class="art">${art(m.art, 24)}</span>${m.name} <span class="handle" style="margin:0">wp-${m.wp}</span></div></td>
+      <td class="muted">project</td><td>${m.week === 'Quiet' ? '–' : m.week.split(' ')[0]}</td><td>${m.tl}</td><td class="muted">${i ? '1mo ago' : '31m ago'}</td></tr>`),
+    ...projects.map(p => `<tr><td><div class="name"><span class="caret"></span><span class="art">${art(p.art, 24)}</span>${p.name} <span class="handle" style="margin:0">wp-${p.wp}</span></div></td>
+      <td class="muted">project</td><td>${p.week.startsWith('Quiet') ? '–' : p.week.split(' ')[0]}</td><td>${p.tl}</td><td class="muted">${p.synced.replace('Synced ', '')}</td></tr>`),
+  ];
+  document.querySelector('#list tbody').innerHTML = rows.join('');
+
+  document.getElementById('wsArt').innerHTML = art('violet', 46);
+  document.getElementById('memberArt').innerHTML = art('green', 46);
+
+  // ---------- navigation ----------
+  function go(view) {
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + view));
+    document.querySelectorAll('#previewBar button').forEach(b => b.classList.toggle('on', b.dataset.go === view));
+    document.querySelector('main').scrollTop = 0;
+    history.replaceState(null, '', '#' + view);
+  }
+  const start = location.hash.slice(1);
+  if (['grid', 'list', 'workspace', 'member'].includes(start)) go(start);
+  document.addEventListener('click', e => {
+    const t = e.target.closest('[data-go]');
+    if (t) go(t.dataset.go);
+    if (!e.target.closest('#newMenu')) document.getElementById('newMenu').classList.remove('open');
+  });
+</script>
+</body>
+</html>

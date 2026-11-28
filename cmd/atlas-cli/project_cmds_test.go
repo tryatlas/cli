@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,9 @@ type fakeIngest struct {
 	mu     sync.Mutex
 	bodies map[string]string
 	routes map[string]string
+	// respond, when set, answers before the route table (uri is the path
+	// and query); ok false falls through to it.
+	respond func(method, uri, body string) (answer string, ok bool)
 }
 
 func installFakeIngest(t *testing.T, routes map[string]string) *fakeIngest {
@@ -34,6 +38,11 @@ func installFakeIngest(t *testing.T, routes map[string]string) *fakeIngest {
 		f.mu.Lock()
 		f.bodies[key] = string(b)
 		body, ok := f.routes[key]
+		if f.respond != nil {
+			if a, aok := f.respond(r.Method, r.URL.RequestURI(), string(b)); aok {
+				body, ok = a, true
+			}
+		}
 		f.mu.Unlock()
 		if r.Header.Get("Authorization") == "" {
 			w.WriteHeader(401)
@@ -378,12 +387,15 @@ func TestWorkspaceCommand(t *testing.T) {
 		t.Fatalf("show after sync: %s", out)
 	}
 
-	// A folder without git joins by hand, and status inside it finds the workspace.
+	// A folder without git joins by hand, as a Project in the workspace (ADR-0016).
 	docs := filepath.Join(mother, "docs")
 	_ = os.Mkdir(docs, 0o755)
 	t.Chdir(mother)
-	if code, _, e := runCmd(t, "workspace", "add", "docs"); code != 0 || !hooked(docs) {
-		t.Fatalf("add: %d %s", code, e)
+	if code, out, e := runCmd(t, "workspace", "add", "docs"); code != 0 || !hooked(docs) || !strings.Contains(out, "docs: Project in the workspace (local") {
+		t.Fatalf("add: %d %s %s", code, out, e)
+	}
+	if ws, ok := project.LinkOf(docs); !ok || ws != mother {
+		t.Fatalf("docs linked to %q", ws)
 	}
 	if code, _, e := runCmd(t, "workspace", "add", t.TempDir()); code == 0 || !strings.Contains(e, "not inside the workspace") {
 		t.Fatalf("add outside: %d %s", code, e)
@@ -391,8 +403,12 @@ func TestWorkspaceCommand(t *testing.T) {
 	if code, _, e := runCmd(t, "workspace", "remove", "frontend"); code == 0 || !strings.Contains(e, "not added by hand") {
 		t.Fatalf("remove a repository: %d %s", code, e)
 	}
-	if code, _, e := runCmd(t, "workspace", "remove", "docs"); code != 0 || hooked(docs) {
-		t.Fatalf("remove: %d %s", code, e)
+	// Removed, it goes on as a Project on its own: bound and hooked, not a member.
+	if code, out, e := runCmd(t, "workspace", "remove", "docs"); code != 0 || !hooked(docs) || !strings.Contains(out, "is a Project on its own now") {
+		t.Fatalf("remove: %d %s %s", code, out, e)
+	}
+	if slices.Contains(project.Members(mother), docs) {
+		t.Fatal("docs is still a member")
 	}
 
 	// off unhooks the members and keeps the workspace folder's own hook.
