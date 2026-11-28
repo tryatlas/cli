@@ -342,14 +342,20 @@ func TestInitAsksTheNewProjectsName(t *testing.T) {
 	oldI, oldS, oldM, oldN := interactive, chooseStep, chooseMany, chooseName
 	t.Cleanup(func() { interactive, chooseStep, chooseMany, chooseName = oldI, oldS, oldM, oldN })
 	interactive = func() bool { return true }
-	chooseStep = func(_ tui.Step, question string, choices []tui.Choice, initial int) (int, error) {
-		if strings.HasPrefix(question, "Which Project") {
+	// Every other step is answered so that nothing leaves the test: no
+	// model download (CI has a network), no background listener.
+	chooseStep = func(_ tui.Step, question string, choices []tui.Choice, _ int) (int, error) {
+		switch {
+		case strings.HasPrefix(question, "Which Project"):
 			if last := choices[len(choices)-1]; last.Label != "+ Create a new Project" || last.Detail != "you name it next" {
 				t.Errorf("create row: %+v", last)
 			}
 			return len(choices) - 1, nil
+		case strings.HasPrefix(question, "Download the memory search model"):
+			return 1, nil // Not now
 		}
-		return initial, nil
+		t.Fatalf("an unexpected question: %q", question)
+		return 0, nil
 	}
 	chooseMany = func(_ tui.Step, _, _ string, _ []tui.Choice, _ []bool) ([]int, error) { return nil, nil }
 	var initial string
@@ -362,7 +368,7 @@ func TestInitAsksTheNewProjectsName(t *testing.T) {
 		}
 		return "Lilygo v2", nil
 	}
-	code, out, e := runCmd(t, "init")
+	code, out, e := runCmd(t, "init", "--sync", "off", "--agents", "claude-code")
 	if code != 0 {
 		t.Fatalf("init: %d %s %s", code, out, e)
 	}

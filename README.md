@@ -72,14 +72,14 @@ atlas-cli status     # what was captured, what synced, what agents remember
 | step | asks |
 |---|---|
 | 1 · Organisation | which organisation the folder belongs to (skipped when you have one) |
-| 2 · Project | the cloud Project: the one matching this repository first, the others, or a new one |
+| 2 · Project | the cloud Project: the one matching this repository first, the others, or a new one, which you then name (its handle follows the name; a taken one is said at once) |
 | 3 · Agents | which agents found on this machine to hook, with an **All agents** row |
 | 4 · Background sync | keep a listener running so every event reaches the cloud at once |
 | 5 · Memory search | download the local search model (87 MB, once) when it is missing |
 
 `--local` binds without a cloud. In scripts, flags answer instead: `--org`,
-`--project | --create`, `--agents claude-code,codex | --all-agents`,
-`--sync on|off`.
+`--project | --create` (with `--name` and `--slug` for the new one),
+`--agents claude-code,codex | --all-agents`, `--sync on|off`.
 
 `atlas-cli settings` changes any of it later on one screen: account, capture and
 memory, each agent, background sync, the local model, updates.
