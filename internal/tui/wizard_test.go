@@ -101,3 +101,51 @@ func TestIndentKeepsWrappedLinesOnTheStem(t *testing.T) {
 		}
 	}
 }
+
+func TestStepInputEditsTheNameAndShowsWhyOneIsRefused(t *testing.T) {
+	var m tea.Model = stepInput{step: Step{N: 2, Total: 4, Title: "Project name"}, question: "Name the new Project",
+		hint: "its handle: lilygo", value: []rune("lilygo"),
+		check: func(v string) string {
+			if v == "lilygo" {
+				return "taken"
+			}
+			return ""
+		}}
+	s := plain(m.View())
+	for _, want := range []string{"STEP 2 OF 4", "Name the new Project", "lilygo▏", "its handle: lilygo", "[ENTER] confirm"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing %q:\n%s", want, s)
+		}
+	}
+	m = hit(m, tea.KeyEnter, "")
+	if fm := m.(stepInput); fm.done || !strings.Contains(plain(m.View()), "taken") {
+		t.Fatalf("a refused name was accepted: %+v", fm)
+	}
+	for _, r := range "-v2" {
+		m = hit(m, r, string(r))
+	}
+	if strings.Contains(plain(m.View()), "taken") {
+		t.Fatal("the refusal stayed after typing")
+	}
+	m = hit(m, tea.KeyBackspace, "")
+	m = hit(m, '3', "3")
+	m = hit(m, tea.KeyEnter, "")
+	fm := m.(stepInput)
+	if !fm.done || !fm.ok || string(fm.value) != "lilygo-v3" {
+		t.Fatalf("%+v", fm)
+	}
+	if s := plain(m.View()); !strings.Contains(s, "Project name") || !strings.Contains(s, "lilygo-v3") {
+		t.Fatalf("summary: %s", s)
+	}
+
+	var e tea.Model = stepInput{step: Step{Title: "Project name"}, value: []rune("x")}
+	e = hit(e, tea.KeyEscape, "")
+	if fm := e.(stepInput); !fm.done || fm.ok {
+		t.Fatalf("esc: %+v", fm)
+	}
+	var empty tea.Model = stepInput{step: Step{Title: "Project name"}}
+	empty = hit(empty, tea.KeyEnter, "")
+	if !strings.Contains(plain(empty.View()), "a name is needed") {
+		t.Fatal("an empty name was not refused")
+	}
+}

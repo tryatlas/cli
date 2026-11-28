@@ -30,6 +30,7 @@ var (
 	interactive = tui.Interactive
 	chooseStep  = tui.StepSelect
 	chooseMany  = tui.StepMulti
+	chooseName  = tui.StepInput
 	now         = time.Now
 )
 
@@ -368,13 +369,16 @@ func pickProject(cmd *cobra.Command, ic *ingest.Client, org auth.Org, launch str
 		}
 		return ws, how, err
 	case create:
-		ws, how, err := createProject(cmd, ic, org, launch, fp)
+		ws, how, err := createProject(cmd, ic, org, launch, fp, step)
 		if err == nil {
 			stepDone(cmd, step, ws.Label()+" (new)")
 		}
 		return ws, how, err
 	}
-	newLabel := tui.Choice{Label: "+ Create a new Project", Detail: "“" + defaultSlug(cmd, launch) + "”"}
+	newLabel := tui.Choice{Label: "+ Create a new Project", Detail: "you name it next"}
+	if n, _ := flags.GetString("name"); n != "" {
+		newLabel.Detail = "“" + n + "”"
+	}
 
 	if fp.RootCommitSHA != nil || fp.GitURL != nil {
 		res, err := ic.Connect(ctx, ingest.ConnectRequest{OrgID: org.ID, RootCommitSHA: fp.RootCommitSHA, GitURL: fp.GitURL})
@@ -406,7 +410,7 @@ func pickProject(cmd *cobra.Command, ic *ingest.Client, org auth.Org, launch str
 			case i == 0:
 				return opts[0], "matched by " + res.Reason, nil
 			case i == len(opts):
-				return createProject(cmd, ic, org, launch, fp)
+				return createProject(cmd, ic, org, launch, fp, step)
 			}
 			return connect(opts[i].ID, &opts[i].Slug)
 		case "ambiguous":
@@ -437,26 +441,66 @@ func pickProject(cmd *cobra.Command, ic *ingest.Client, org auth.Org, launch str
 		return ingest.Workspace{}, "", err
 	}
 	if i == len(list) {
-		return createProject(cmd, ic, org, launch, fp)
+		return createProject(cmd, ic, org, launch, fp, step)
 	}
 	return connect(list[i].ID, &list[i].Slug)
 }
 
-func createProject(cmd *cobra.Command, ic *ingest.Client, org auth.Org, launch string, fp project.GitFingerprint) (ingest.Workspace, string, error) {
+// createProject makes a new cloud Project. On a terminal, unless --name or
+// --yes says, it asks for the name, starting from the folder's; the handle
+// follows the name (or --slug), and a taken one is said under the field.
+func createProject(cmd *cobra.Command, ic *ingest.Client, org auth.Org, launch string, fp project.GitFingerprint, step tui.Step) (ingest.Workspace, string, error) {
 	ctx := cmd.Context()
-	slug := defaultSlug(cmd, launch)
-	name, _ := cmd.Flags().GetString("name")
+	flags := cmd.Flags()
+	vis, _ := flags.GetString("visibility")
+	if vis != "org" && vis != "restricted" {
+		return ingest.Workspace{}, "", fmt.Errorf("--visibility must be org or restricted, not %q", vis)
+	}
+	name, _ := flags.GetString("name")
+	fixedSlug, _ := flags.GetString("slug")
+	yes, _ := flags.GetBool("yes")
+	slugOf := func(name string) string {
+		if fixedSlug != "" {
+			return fixedSlug
+		}
+		return slugify(name)
+	}
+	if name == "" && interactive() && !yes {
+		hint := "its handle follows the name"
+		if fixedSlug != "" {
+			hint = "its handle: " + fixedSlug + " (--slug)"
+		}
+		var err error
+		name, err = chooseName(tui.Step{N: step.N, Total: step.Total, Title: "Project name"},
+			"Name the new Project in "+org.Name, hint, filepath.Base(launch), func(v string) string {
+				slug := slugOf(v)
+				if slug == "" {
+					return "use letters or digits: the handle is made from them"
+				}
+				free, err := ic.SlugAvailable(ctx, org.ID, slug)
+				switch {
+				case err != nil:
+					return "could not check the handle: " + err.Error()
+				case !free:
+					return fmt.Sprintf("the handle %q is taken in %s; pick another name", slug, org.Name)
+				}
+				return ""
+			})
+		if err != nil {
+			return ingest.Workspace{}, "", err
+		}
+	}
 	if name == "" {
 		name = filepath.Base(launch)
 	}
-	vis, _ := cmd.Flags().GetString("visibility")
-	if vis != "org" && vis != "restricted" {
-		return ingest.Workspace{}, "", fmt.Errorf("--visibility must be org or restricted, not %q", vis)
+	slug := slugOf(name)
+	if slug == "" {
+		return ingest.Workspace{}, "", fmt.Errorf("cannot make a handle from %q; pass --slug", name)
 	}
 	if free, err := ic.SlugAvailable(ctx, org.ID, slug); err != nil {
 		return ingest.Workspace{}, "", err
 	} else if !free {
-		return ingest.Workspace{}, "", fmt.Errorf("the Project handle %q is taken in %s; pass another with --slug", slug, org.Name)
+		return ingest.Workspace{}, "", fmt.Errorf("the Project handle %q is taken in %s; pass another with --name or --slug", slug, org.Name)
 	}
 	id, err := ic.Create(ctx, ingest.CreateRequest{OrgID: org.ID, Slug: slug, Visibility: vis, Name: &name,
 		RootCommitSHA: fp.RootCommitSHA, GitURL: fp.GitURL})
@@ -464,13 +508,6 @@ func createProject(cmd *cobra.Command, ic *ingest.Client, org auth.Org, launch s
 		return ingest.Workspace{}, "", err
 	}
 	return ingest.Workspace{ID: id, Slug: slug, Name: &name}, "created", nil
-}
-
-func defaultSlug(cmd *cobra.Command, launch string) string {
-	if s, _ := cmd.Flags().GetString("slug"); s != "" {
-		return s
-	}
-	return slugify(filepath.Base(launch))
 }
 
 func workspaceLabels(ws []ingest.Workspace) []string {

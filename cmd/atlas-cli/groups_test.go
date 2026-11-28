@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -308,5 +309,73 @@ func TestAMatchedProjectIsMovedOnlyAfterAYes(t *testing.T) {
 				t.Fatalf("output: %s", out)
 			}
 		})
+	}
+}
+
+// On a terminal, "+ Create a new Project" asks for the name, starting from
+// the folder's; a name whose handle is taken is refused under the field.
+func TestInitAsksTheNewProjectsName(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "lilygo")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	installFakeAuth(t, routes())
+	var created map[string]any
+	f := installFakeIngest(t, map[string]string{})
+	f.respond = func(method, uri, body string) (string, bool) {
+		path, _, _ := strings.Cut(uri, "?")
+		switch {
+		case method == "GET" && path == "/workspaces":
+			return `{"workspaces":[{"id":"ws_lilygo","slug":"lilygo","name":"lilygo"}]}`, true
+		case strings.HasPrefix(path, "/workspaces/slug-available"):
+			return fmt.Sprintf(`{"available":%v}`, !strings.HasSuffix(uri, "slug=lilygo")), true
+		case method == "POST" && path == "/workspaces":
+			_ = json.Unmarshal([]byte(body), &created)
+			return `{"workspaceId":"ws_new"}`, true
+		}
+		return "", false
+	}
+	if code, _, e := runCmd(t, "login", "--no-browser"); code != 0 {
+		t.Fatal(e)
+	}
+	oldI, oldS, oldM, oldN := interactive, chooseStep, chooseMany, chooseName
+	t.Cleanup(func() { interactive, chooseStep, chooseMany, chooseName = oldI, oldS, oldM, oldN })
+	interactive = func() bool { return true }
+	chooseStep = func(_ tui.Step, question string, choices []tui.Choice, initial int) (int, error) {
+		if strings.HasPrefix(question, "Which Project") {
+			if last := choices[len(choices)-1]; last.Label != "+ Create a new Project" || last.Detail != "you name it next" {
+				t.Errorf("create row: %+v", last)
+			}
+			return len(choices) - 1, nil
+		}
+		return initial, nil
+	}
+	chooseMany = func(_ tui.Step, _, _ string, _ []tui.Choice, _ []bool) ([]int, error) { return nil, nil }
+	var initial string
+	var refused string
+	chooseName = func(_ tui.Step, _, _ string, start string, check func(string) string) (string, error) {
+		initial = start
+		refused = check("lilygo")
+		if p := check("Lilygo v2"); p != "" {
+			t.Errorf("a free name was refused: %s", p)
+		}
+		return "Lilygo v2", nil
+	}
+	code, out, e := runCmd(t, "init")
+	if code != 0 {
+		t.Fatalf("init: %d %s %s", code, out, e)
+	}
+	if initial != "lilygo" {
+		t.Fatalf("the field started from %q", initial)
+	}
+	if !strings.Contains(refused, `the handle "lilygo" is taken`) {
+		t.Fatalf("a taken handle was not refused: %q", refused)
+	}
+	if created["name"] != "Lilygo v2" || created["slug"] != "lilygo-v2" {
+		t.Fatalf("created %v", created)
+	}
+	if b := binding(t, dir); *b.RemoteWorkspaceID != "ws_new" || *b.Slug != "lilygo-v2" {
+		t.Fatalf("binding: %+v", b)
 	}
 }
