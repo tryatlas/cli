@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tryatlas/cli/internal/capture/store"
+	"github.com/tryatlas/cli/internal/project"
 	"github.com/tryatlas/cli/internal/redact"
 )
 
@@ -34,6 +35,8 @@ type Recorder struct {
 
 	mu       sync.Mutex
 	sessions map[string]*live
+	kindOnce sync.Once
+	kind     project.Kind // the root's kind, for mayTag
 }
 
 // live is what the recorder remembers about a session in this process.
@@ -366,7 +369,7 @@ func (r *Recorder) sampleWindow(ctx context.Context, l *live, callID string, w s
 		} else {
 			ft.Deleted = true
 		}
-		if err := r.Store.AddFileTouch(ctx, ft, now); err != nil {
+		if err := r.addTouch(ctx, ft, now); err != nil {
 			return err
 		}
 	}
@@ -402,7 +405,7 @@ func (r *Recorder) sampleWrites(ctx context.Context, l *live, callID, nativeID s
 		} else {
 			ft.Deleted = true
 		}
-		if err := r.Store.AddFileTouch(ctx, ft, now); err != nil {
+		if err := r.addTouch(ctx, ft, now); err != nil {
 			return err
 		}
 		if l.anchor != nil && !out {
@@ -445,7 +448,7 @@ func (r *Recorder) sampleShell(ctx context.Context, l *live, callID string, now 
 		} else {
 			ft.Deleted = true
 		}
-		if err := r.Store.AddFileTouch(ctx, ft, now); err != nil {
+		if err := r.addTouch(ctx, ft, now); err != nil {
 			return err
 		}
 	}
@@ -510,9 +513,17 @@ func gitOut(dir string, args ...string) string {
 	return strings.TrimSpace(string(b))
 }
 
-// gitStatus is the set of paths git status reports (rename origins included).
+// gitStatus is the set of paths git status reports (rename origins
+// included), spelled from root: in a workspace, each member repository's
+// with its folder (ADR-0017). nil when root is in no repository.
 func gitStatus(root string) map[string]bool {
-	b, err := gitRaw(root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	repos := project.Repos(root)
+	return joinPaths(repos, project.EachRepo(repos, func(r project.Repo) map[string]bool { return repoStatus(r.Dir) }))
+}
+
+// repoStatus is one repository's git status.
+func repoStatus(dir string) map[string]bool {
+	b, err := gitRaw(dir, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil
 	}
@@ -534,19 +545,81 @@ func gitStatus(root string) map[string]bool {
 	return out
 }
 
-// headFiles is the set of paths tracked at HEAD.
+// headFiles is the set of paths tracked at HEAD, spelled from root as
+// gitStatus spells them.
 func headFiles(root string) map[string]bool {
-	b, err := gitRaw(root, "ls-tree", "-r", "-z", "--name-only", "HEAD")
-	out := map[string]bool{}
-	if err != nil {
-		return out
+	repos := project.Repos(root)
+	out := joinPaths(repos, project.EachRepo(repos, func(r project.Repo) map[string]bool { return repoHeadFiles(r.Dir) }))
+	if out == nil {
+		out = map[string]bool{}
 	}
+	return out
+}
+
+// repoHeadFiles is one repository's paths tracked at HEAD.
+func repoHeadFiles(dir string) map[string]bool {
+	b, err := gitRaw(dir, "ls-tree", "-r", "-z", "--name-only", "HEAD")
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
 	for _, p := range strings.Split(string(b), "\x00") {
 		if p != "" {
 			out[p] = true
 		}
 	}
 	return out
+}
+
+// joinPaths spells each repository's paths from the store's root, its
+// prefix first; nil when no repository answered.
+func joinPaths(repos []project.Repo, parts []map[string]bool) map[string]bool {
+	var out map[string]bool
+	for i, m := range parts {
+		if m == nil {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool, len(m))
+		}
+		for p := range m {
+			out[repos[i].Prefix+p] = true
+		}
+	}
+	return out
+}
+
+// addTouch writes a file_touch row. In a workspace's store, or in a member
+// Project's, a touch can tag the session with another Project, so the
+// session is sent again and the drain works its tags out (ADR-0017).
+func (r *Recorder) addTouch(ctx context.Context, ft store.FileTouch, now time.Time) error {
+	if err := r.Store.AddFileTouch(ctx, ft, now); err != nil {
+		return err
+	}
+	if r.mayTag(ft) {
+		return r.Store.ResyncSession(ctx, ft.SessionID)
+	}
+	return nil
+}
+
+// mayTag says whether a touch can tag its session with another Project:
+// in a workspace's store one inside a folder (a member, maybe), in a member
+// Project's store one outside it (a sibling, maybe).
+func (r *Recorder) mayTag(ft store.FileTouch) bool {
+	r.kindOnce.Do(func() {
+		if project.IsWorkspace(r.Root) {
+			r.kind = project.KindWorkspace
+		} else if _, ok := project.LinkOf(r.Root); ok {
+			r.kind = project.KindMember
+		}
+	})
+	switch r.kind {
+	case project.KindWorkspace:
+		return !ft.OutOfRepo && strings.Contains(ft.Path, "/")
+	case project.KindMember:
+		return ft.OutOfRepo
+	}
+	return false
 }
 
 // Gauge records the context gauges (ACP usage_update: used, size) without

@@ -4,7 +4,9 @@
 layouts: "they create 1 main folder with the project name, under it
 frontend, backend etc., each with its own git; they want to init atlas 1 time
 in the mother folder and run agents under frontend, backend"). Amends
-ADR-0007.
+ADR-0007. **Amended 2026-11-28 by ADR-0016: a member repository can be a
+Project of its own, linked to the workspace; `atlas init` in a member joins
+it instead of splitting it off.**
 
 ## Context
 

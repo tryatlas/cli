@@ -132,11 +132,12 @@ func (s *Store) ConsumeTouches(ctx context.Context, sessionID, path, sha string,
 type LinkedCheckpoint struct {
 	ID, SessionID, CommitSHA, LinkState string
 	PatchID, Branch                     *string
+	Files                               []string // files_touched: commit-side paths, from the store's root
 }
 
 // ProjectCheckpoints lists a Project's checkpoints.
 func (s *Store) ProjectCheckpoints(ctx context.Context, workspaceID string) ([]LinkedCheckpoint, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.session_id, c.commit_sha, c.link_state, c.patch_id, c.branch
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id, c.session_id, c.commit_sha, c.link_state, c.patch_id, c.branch, c.files_touched
 	    FROM checkpoint c JOIN agent_session s ON s.id = c.session_id WHERE s.workspace_id = ? ORDER BY c.created_at`, workspaceID)
 	if err != nil {
 		return nil, err
@@ -145,9 +146,11 @@ func (s *Store) ProjectCheckpoints(ctx context.Context, workspaceID string) ([]L
 	var out []LinkedCheckpoint
 	for rows.Next() {
 		var c LinkedCheckpoint
-		if err := rows.Scan(&c.ID, &c.SessionID, &c.CommitSHA, &c.LinkState, &c.PatchID, &c.Branch); err != nil {
+		var files string
+		if err := rows.Scan(&c.ID, &c.SessionID, &c.CommitSHA, &c.LinkState, &c.PatchID, &c.Branch, &files); err != nil {
 			return nil, err
 		}
+		_ = json.Unmarshal([]byte(files), &c.Files)
 		out = append(out, c)
 	}
 	return out, rows.Err()

@@ -15,6 +15,7 @@ import (
 
 	"github.com/tryatlas/cli/internal/capture/store"
 	"github.com/tryatlas/cli/internal/ingest"
+	"github.com/tryatlas/cli/internal/project"
 )
 
 // Batch limits (SPEC §6.7).
@@ -287,13 +288,14 @@ func Drain(ctx context.Context, c *Client, st *store.Store, budget time.Duration
 	p := &pass{c: c, st: st, rep: &rep, now: now}
 	seen := map[string]bool{}
 	uploaded := map[string]bool{}
+	tags := sessionTags(ctx, st, b.Root)
 	for now().Before(deadline) {
 		o, err := st.Pending(ctx, page)
 		if err != nil {
 			return rep, err
 		}
 		var fresh []item
-		for _, it := range t.items(o) {
+		for _, it := range t.items(o, tags) {
 			if !seen[it.id] {
 				seen[it.id] = true
 				fresh = append(fresh, it)
@@ -312,6 +314,34 @@ func Drain(ctx context.Context, c *Client, st *store.Store, budget time.Duration
 		}
 	}
 	return rep, nil
+}
+
+// sessionTags works out a session's tags (ADR-0017) from the store's rows
+// and the layout of its workspace, read once a pass and only when a session
+// goes out. nil for a plain Project's sessions. A session whose rows cannot
+// be read goes without the field, so the server keeps the tags it has.
+func sessionTags(ctx context.Context, st *store.Store, root string) func(string) *[]projectTag {
+	var layout *project.Layout
+	read := false
+	memo := map[string]*[]projectTag{}
+	return func(id string) *[]projectTag {
+		if !read {
+			layout, read = project.LayoutOf(ctx, root), true
+		}
+		if layout == nil {
+			return nil
+		}
+		if v, ok := memo[id]; ok {
+			return v
+		}
+		changed, committed, err := st.SessionFiles(ctx, id)
+		if err != nil {
+			return nil
+		}
+		v := tagsFor(layout.Tags(changed, committed))
+		memo[id] = v
+		return v
+	}
 }
 
 // run uploads each row's blobs, then posts it in a batch, flushing at 100

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/tryatlas/cli/internal/capture/store"
+	"github.com/tryatlas/cli/internal/project"
 )
 
 // Rewrites (evidence-capture.md §6.4): a checkpoint whose commit is no
@@ -79,14 +81,30 @@ func (g runner) onBranch(ctx context.Context, sha, branch string) bool {
 
 // Reconcile checks every checkpoint of the Project against the history.
 func Reconcile(ctx context.Context, st *store.Store, root string, now func() time.Time) (Reconciled, error) {
+	return reconcile(ctx, st, root, project.Repo{Dir: root}, now)
+}
+
+// reconcile checks the checkpoints of the store at root whose commits are
+// in the repository repo: all of them for the store's own repository; for a
+// workspace member, those whose files are under its folder (one commit is in
+// one repository, so its first file says which).
+func reconcile(ctx context.Context, st *store.Store, root string, repo project.Repo, now func() time.Time) (Reconciled, error) {
 	var r Reconciled
-	g := runner{dir: root}
+	g := runner{dir: repo.Dir}
 	if _, err := g.out(ctx, "rev-parse", "-q", "--verify", "HEAD"); err != nil || g.midOperation(ctx) {
 		return r, nil
 	}
 	cps, err := st.ProjectCheckpoints(ctx, root)
-	if err != nil || len(cps) == 0 {
+	if err != nil {
 		return r, err
+	}
+	if repo.Prefix != "" {
+		cps = slices.DeleteFunc(cps, func(c store.LinkedCheckpoint) bool {
+			return len(c.Files) == 0 || !strings.HasPrefix(c.Files[0], repo.Prefix)
+		})
+	}
+	if len(cps) == 0 {
+		return r, nil
 	}
 	var ids map[string][]string
 	for _, cp := range cps {

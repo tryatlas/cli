@@ -124,11 +124,11 @@ func runMCPBridge(cmd *cobra.Command, args []string) error {
 	}
 	if p, err := project.Discover(cmd.Context(), root); err == nil {
 		root = p.Root
-		if !p.Workspace {
+		if p.Kind != project.KindWorkspace {
 			cwd = root
 		}
-		// In a workspace the agent works in one member repository: its
-		// relative paths resolve there, not in the workspace folder.
+		// In a workspace the agent works in one unbound member repository:
+		// its relative paths resolve there, not in the workspace folder.
 	}
 	if agentID == "" {
 		agentID = "unknown"

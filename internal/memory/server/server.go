@@ -172,10 +172,11 @@ func (s *Server) Capture(ctx context.Context, g Grant, reply string) {
 }
 
 // labelDir is where project.json goes: the workspace folder for a session in
-// one of its repositories (an .atlas/ there would show up in that repository's
-// git status), else the cwd as before.
+// one of its unbound repositories (an .atlas/ there would show up in that
+// repository's git status), a member Project's own folder (it has an .atlas/
+// already), else the cwd as before.
 func labelDir(ctx context.Context, cwd string) string {
-	if p, err := project.Discover(ctx, cwd); err == nil && p.Workspace {
+	if p, err := project.Discover(ctx, cwd); err == nil && p.Kind != project.KindPlain {
 		return p.Root
 	}
 	return cwd

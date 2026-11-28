@@ -255,7 +255,7 @@ type writer struct{ source, agent, session string }
 
 // afterWrite settles the entry's state, sets changed_by, appends a sealed
 // revision holding the entry as it now stands, points entries.rev at it and
-// rewrites the FTS row — all in the caller's transaction (ADR-0017).
+// rewrites the FTS row — all in the caller's transaction (desktop ADR-0017).
 // forceState, when set, overrides the settled state (archived).
 func afterWrite(ctx context.Context, tx *sql.Tx, id int64, op string, by writer, changedBy string, at int64, note, forceState string) (*Entry, error) {
 	if forceState != "" {

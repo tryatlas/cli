@@ -60,22 +60,36 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		})
 	}
 
-	workspace, err := pickWorkspace(cmd, launch, scope, guided)
-	if err != nil {
+	// A repository in a workspace joins it as a member Project (ADR-0016); a
+	// folder of repositories can become a workspace (ADR-0015).
+	workspace, asked := false, false
+	joinWS := project.EnclosingWorkspace(ctx, launch)
+	if joinWS != "" {
+		var join bool
+		if join, asked, err = pickJoin(cmd, launch, joinWS, guided); err != nil {
+			return err
+		}
+		if !join {
+			joinWS = ""
+		}
+	} else if workspace, err = pickWorkspace(cmd, launch, scope, guided); err != nil {
 		return err
 	}
-	if workspace {
+	switch {
+	case workspace:
 		scope = launch // a workspace keeps its own memory, shared by its repositories
-	} else if launch != scope {
+	case joinWS != "":
+		scope = joinWS // a member Project's memory is its workspace's
+	case launch != scope:
 		fmt.Fprintf(errOut, "Note: %s is inside the repository %s.\n"+
 			"Capture is recorded for this folder only; shared memory is shared with the whole repository.\n", launch, scope)
 		if err := confirm(cmd, yes, "Bind this subfolder as its own Project?"); err != nil {
 			return err
 		}
 	}
-	if p, err := project.Discover(ctx, launch); err == nil && p.Workspace && p.Root != launch {
+	if p, err := project.Discover(ctx, launch); err == nil && joinWS == "" && !asked && p.WorkspaceRoot != "" && p.Root != launch {
 		fmt.Fprintf(errOut, "Note: %s is part of the workspace %s.\n"+
-			"Binding it splits it off: its sessions and memory stop going to the workspace.\n", launch, p.Root)
+			"Binding it on its own splits it off: its sessions and memory stop going to the workspace.\n", launch, p.WorkspaceRoot)
 		if err := confirm(cmd, yes, "Bind this folder as its own Project?"); err != nil {
 			return err
 		}
@@ -110,20 +124,53 @@ func runInit(cmd *cobra.Command, _ []string) error {
 			return err
 		}
 	}
-	steps := initSteps(local)
+	// A member Project is in its workspace's organisation (ADR-0016).
+	wantOrg := ""
+	if joinWS != "" && !local {
+		if wb, err := bindingOf(ctx, joinWS); err == nil && wb != nil && wb.OrgID != nil {
+			wantOrg = *wb.OrgID
+		}
+	}
+	candidates := 0
+	if workspace && guided {
+		candidates = len(memberCandidates(ctx, launch))
+	}
+	steps := initSteps(local, candidates > 0)
 
-	if err := bindFolder(cmd, a, sess, local, launch, scope, steps); err != nil {
+	if err := bindFolder(cmd, a, sess, local, launch, scope, wantOrg, steps); err != nil {
 		return err
+	}
+	if joinWS != "" {
+		if err := project.Join(launch, joinWS); err != nil {
+			return err
+		}
+	} else if err := project.Leave(launch); err != nil { // bound on its own now
+		return err
+	}
+	if !workspace && project.IsWorkspace(launch) { // a workspace no more: as atlas-cli workspace off
+		left, err := releaseMembers(ctx, launch)
+		if err != nil {
+			return err
+		}
+		if len(left) > 0 {
+			fmt.Fprintf(errOut, "Note: %s go on as Projects of their own.\n", memberNames(launch, left))
+		}
 	}
 	if err := project.SetWorkspace(launch, workspace); err != nil {
 		return err
+	}
+	if workspace {
+		if err := offerMembers(cmd, launch, guided, steps); err != nil {
+			return err
+		}
 	}
 	ensureMemoryRecord(scope)
 	return finishInit(cmd, launch, local, guided, steps)
 }
 
 // bindFolder writes the binding under the writer lock and lets it go.
-func bindFolder(cmd *cobra.Command, a *auth.Auth, sess *auth.Session, local bool, launch, scope string, steps initStepper) error {
+// wantOrg, when set, is the only organisation the folder may join.
+func bindFolder(cmd *cobra.Command, a *auth.Auth, sess *auth.Session, local bool, launch, scope, wantOrg string, steps initStepper) error {
 	ctx := cmd.Context()
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	yes, _ := cmd.Flags().GetBool("yes")
@@ -173,7 +220,7 @@ func bindFolder(cmd *cobra.Command, a *auth.Auth, sess *auth.Session, local bool
 		return nil
 	}
 
-	org, err := pickOrg(cmd, sess, steps.step("Organisation"))
+	org, err := pickOrg(cmd, sess, wantOrg, steps.step("Organisation"))
 	if err != nil {
 		return err
 	}
@@ -229,8 +276,17 @@ func confirm(cmd *cobra.Command, yes bool, question string) error {
 	return tui.ErrCancelled
 }
 
-func pickOrg(cmd *cobra.Command, s *auth.Session, step tui.Step) (auth.Org, error) {
+// pickOrg chooses the organisation: --org, else the only one, else asked.
+// fixed, when set, is the only one allowed: a member Project goes where its
+// workspace is.
+func pickOrg(cmd *cobra.Command, s *auth.Session, fixed string, step tui.Step) (auth.Org, error) {
 	want, _ := cmd.Flags().GetString("org")
+	if fixed != "" {
+		if want != "" && want != fixed {
+			return auth.Org{}, fmt.Errorf("the workspace is in the organisation %s; a Project in it must be too (or bind it on its own: --workspace=false)", fixed)
+		}
+		want = fixed
+	}
 	var orgs []auth.Org
 	if s.Identity != nil && s.Identity.Orgs != nil {
 		orgs = *s.Identity.Orgs
@@ -244,6 +300,9 @@ func pickOrg(cmd *cobra.Command, s *auth.Session, step tui.Step) (auth.Org, erro
 				stepDone(cmd, step, o.Name)
 				return o, nil
 			}
+		}
+		if fixed != "" {
+			return auth.Org{}, fmt.Errorf("the workspace is in the organisation %s, which you are not in (atlas-cli org list)", fixed)
 		}
 		return auth.Org{}, fmt.Errorf("%s is not one of your organisations (atlas-cli org list)", want)
 	}
@@ -593,9 +652,15 @@ func statusLines(cmd *cobra.Command, w io.Writer) error {
 	}
 	fmt.Fprintf(w, "Project:   %s\n", p.Root)
 	fmt.Fprintf(w, "Binding:   %s\n", describeBinding(b, sess))
-	if p.Workspace {
-		fmt.Fprintf(w, "Workspace: %s (each shares this Project's sessions and memory)\n", workspaceRepos(p.Root))
-	} else if p.ScopeRoot != p.Root {
+	switch {
+	case p.Kind == project.KindWorkspace:
+		fmt.Fprintf(w, "Workspace: %s\n", workspaceStatus(ctx, p.Root))
+	case p.Kind == project.KindMember:
+		fmt.Fprintf(w, "Workspace: a Project in %s; memory is the workspace's\n", p.WorkspaceRoot)
+	case p.Broken != "":
+		fmt.Fprintf(w, "Workspace: not linked: %s (atlas-cli workspace add, in the workspace, links it again)\n", p.Broken)
+	}
+	if p.Kind == project.KindPlain && p.ScopeRoot != p.Root {
 		fmt.Fprintf(w, "Memory at: %s (shared with the whole repository)\n", p.ScopeRoot)
 	}
 	printGates(w, p.Root, b)
@@ -706,4 +771,18 @@ func workspaceRepos(root string) string {
 		return "no repositories yet"
 	}
 	return repos(len(m)) + ": " + memberNames(root, m)
+}
+
+// workspaceStatus is workspaceRepos and where their sessions go: into the
+// workspace, or into member Projects of their own (ADR-0016).
+func workspaceStatus(ctx context.Context, root string) string {
+	all := len(project.Members(root))
+	names, n := memberProjects(ctx, root)
+	switch {
+	case all == 0 || n == 0:
+		return workspaceRepos(root) + " (each shares this Project's sessions and memory)"
+	case n == all:
+		return workspaceRepos(root) + " (each a Project of its own; one shared memory)"
+	}
+	return fmt.Sprintf("%s (Projects of their own: %s; the rest record here; one shared memory)", workspaceRepos(root), names)
 }

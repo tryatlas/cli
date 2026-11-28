@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"github.com/tryatlas/cli/internal/capture/store"
+	"github.com/tryatlas/cli/internal/project"
 )
 
 // Artifacts are the ingest payloads (SPEC §6.7, evidence-capture.md §7.2):
@@ -32,6 +33,34 @@ type sessionArtifact struct {
 	Model           *string         `json:"model"`
 	TokenTotals     json.RawMessage `json:"tokenTotals"`
 	StartedAt       string          `json:"startedAt"`
+	// Projects is the complete set of the session's tags when its store is
+	// a workspace's or a member Project's (ADR-0017): [] clears them. It is
+	// absent for a plain Project, which leaves the server's tags alone. It
+	// is not in the content hash: the server stores tags before its replay
+	// check.
+	Projects *[]projectTag `json:"projects,omitempty"`
+}
+
+// projectTag is one of a session's tags: another Workspace of its group
+// that the session changed files in or committed to. The home Workspace is
+// the artifact's own workspaceId, so it has no entry.
+type projectTag struct {
+	WorkspaceID *string  `json:"workspaceId"` // null while the folder has no cloud Workspace
+	Folder      string   `json:"folder"`      // from the workspace folder, with "/"
+	Reasons     []string `json:"reasons"`     // edited, committed
+}
+
+// tagsFor builds projectTags from a layout's tags.
+func tagsFor(tags []project.Tag) *[]projectTag {
+	out := make([]projectTag, 0, len(tags))
+	for _, t := range tags {
+		pt := projectTag{WorkspaceID: t.WorkspaceID, Folder: t.Folder}
+		for _, r := range t.Reasons {
+			pt.Reasons = append(pt.Reasons, string(r))
+		}
+		out = append(out, pt)
+	}
+	return &out
 }
 
 type messageArtifact struct {
@@ -133,8 +162,9 @@ func refs(ps ...*string) []string {
 	return out
 }
 
-// items turns an outbox page into artifacts, in drain order.
-func (t Target) items(o store.Outbox) []item {
+// items turns an outbox page into artifacts, in drain order. tags gives a
+// session's projects; nil leaves them out.
+func (t Target) items(o store.Outbox, tags func(sessionID string) *[]projectTag) []item {
 	var out []item
 	add := func(kind store.Kind, id string, a any, g store.Guard, blobs []string) {
 		b, err := json.Marshal(a)
@@ -147,7 +177,7 @@ func (t Target) items(o store.Outbox) []item {
 		add(store.KindSession, r.ID, sessionArtifact{
 			base:      t.base("agent_session", r.ID, 0, SessionHash(r), r.StartedAt),
 			SessionID: r.ID, Source: r.Source, NativeSessionID: r.NativeID, Title: r.Title, Agent: r.Agent, Model: r.Model,
-			TokenTotals: store.RawJSON(r.TokenTotals, "{}"), StartedAt: r.StartedAt,
+			TokenTotals: store.RawJSON(r.TokenTotals, "{}"), StartedAt: r.StartedAt, Projects: tags(r.ID),
 		}, store.SessionGuard(r), nil)
 	}
 	for _, r := range o.Messages {

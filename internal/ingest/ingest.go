@@ -130,6 +130,22 @@ type Workspace struct {
 	RootCommitSHA *string `json:"rootCommitSha,omitempty"`
 	GitURL        *string `json:"gitUrl,omitempty"`
 	Visibility    *string `json:"visibility,omitempty"`
+	// Kind is "group" for a folder of repositories (server ADR-0032), absent
+	// (empty) for a repository Project and from a server without groups.
+	Kind string `json:"kind,omitempty"`
+	// ParentID is the group this Project is in; nil at the top level.
+	ParentID *string `json:"parentId,omitempty"`
+}
+
+// IsGroup reports a workspace group.
+func (w Workspace) IsGroup() bool { return w.Kind == "group" }
+
+// Parent is the group this Project is in, "" when none.
+func (w Workspace) Parent() string {
+	if w.ParentID == nil {
+		return ""
+	}
+	return *w.ParentID
 }
 
 // Label is the name, else the slug.
@@ -142,11 +158,77 @@ func (w Workspace) Label() string {
 
 // Workspaces lists an organisation's cloud Projects.
 func (c *Client) Workspaces(ctx context.Context, orgID string) ([]Workspace, error) {
-	var out struct {
-		Workspaces []Workspace `json:"workspaces"`
+	reg, err := c.Registry(ctx, orgID)
+	return reg.Workspaces, err
+}
+
+// Registry is GET /workspaces: the Projects, and whether the organisation
+// may group them (server ADR-0032; false from a server without groups).
+type Registry struct {
+	Workspaces []Workspace `json:"workspaces"`
+	Groups     bool        `json:"groups"`
+}
+
+// Find is the Project with this id, if listed.
+func (r Registry) Find(id string) (Workspace, bool) {
+	for _, w := range r.Workspaces {
+		if w.ID == id {
+			return w, true
+		}
 	}
+	return Workspace{}, false
+}
+
+// Registry lists an organisation's cloud Projects and its group capability.
+func (c *Client) Registry(ctx context.Context, orgID string) (Registry, error) {
+	var out Registry
 	err := c.do(ctx, http.MethodGet, "/workspaces?orgId="+url.QueryEscape(orgID), nil, &out)
-	return out.Workspaces, err
+	return out, err
+}
+
+// UpdateRequest is PATCH /workspaces/{id}. Only the group fields the CLI
+// sends are here; nil is left out.
+type UpdateRequest struct {
+	// Kind "group" promotes a Project registered by name to a group.
+	Kind *string `json:"kind,omitempty"`
+	// ParentID puts the Project in a group.
+	ParentID *string `json:"parentId,omitempty"`
+	// Ungroup takes it out of its group (parentId null); ParentID wins.
+	Ungroup bool `json:"-"`
+}
+
+// MarshalJSON sends parentId null for Ungroup.
+func (r UpdateRequest) MarshalJSON() ([]byte, error) {
+	m := map[string]any{}
+	if r.Kind != nil {
+		m["kind"] = *r.Kind
+	}
+	switch {
+	case r.ParentID != nil:
+		m["parentId"] = *r.ParentID
+	case r.Ungroup:
+		m["parentId"] = nil
+	}
+	return json.Marshal(m)
+}
+
+// Update changes a cloud Project and returns it as it now is.
+func (c *Client) Update(ctx context.Context, orgID, id string, req UpdateRequest) (Workspace, error) {
+	var out struct {
+		Workspace Workspace `json:"workspace"`
+	}
+	err := c.do(ctx, http.MethodPatch, "/workspaces/"+url.PathEscape(id)+"?org="+url.QueryEscape(orgID), req, &out)
+	return out.Workspace, err
+}
+
+// CodeOf is the server's error code of err ("not_promotable", "group_full",
+// ...), "" when err is not an answer from the server.
+func CodeOf(err error) string {
+	var e *Error
+	if errors.As(err, &e) {
+		return e.Code
+	}
+	return ""
 }
 
 // SlugAvailable asks whether a Project slug is free in an organisation. A 409
@@ -170,6 +252,8 @@ type CreateRequest struct {
 	Name          *string `json:"name,omitempty"`
 	RootCommitSHA *string `json:"rootCommitSha,omitempty"`
 	GitURL        *string `json:"gitUrl,omitempty"`
+	// ParentID creates it in a group; a server without groups ignores it.
+	ParentID *string `json:"parentId,omitempty"`
 }
 
 // ErrSlugTaken is a 409 on create.
@@ -215,6 +299,9 @@ type ConnectResult struct {
 	Slug        *string     `json:"slug"`
 	Reason      string      `json:"reason"`
 	Candidates  []Workspace `json:"candidates"`
+	// ParentID is the connected Project's group, where the organisation has
+	// groups; nil at the top level and from a server without them.
+	ParentID *string `json:"parentId"`
 }
 
 // Connect lets the server match this repository to a Project.

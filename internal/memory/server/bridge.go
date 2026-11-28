@@ -33,7 +33,7 @@ type Reply struct {
 
 // RunBridge reads one JSON-RPC message per line from in, forwards it, and
 // writes every message of the answer (a JSON body or each SSE data: line) to
-// out as one line, whatever the status (ADR-0019). When the server no longer
+// out as one line, whatever the status (desktop ADR-0019). When the server no longer
 // knows the session (a 404 that is not JSON-RPC) it replays initialize and
 // notifications/initialized and retries once.
 func RunBridge(ctx context.Context, in io.Reader, out io.Writer, f Forwarder) error {
@@ -216,7 +216,7 @@ type HTTPForwarder struct {
 }
 
 // CheckLoopbackURL refuses anything but plain http to localhost or a loopback
-// IP, and any URL with userinfo (ADR-0019).
+// IP, and any URL with userinfo (desktop ADR-0019).
 func CheckLoopbackURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {

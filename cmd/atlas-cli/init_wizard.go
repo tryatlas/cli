@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -17,13 +19,17 @@ import (
 )
 
 // initStepper numbers atlas-cli init's steps: Organisation, Project, Agents and
-// Background sync for a cloud Project; Agents only for a local one.
+// Background sync for a cloud Project; Agents only for a local one. A
+// workspace whose repositories can become Projects adds Projects.
 type initStepper []string
 
-func initSteps(local bool) initStepper {
+func initSteps(local, members bool) initStepper {
 	s := initStepper{"Organisation", "Project", "Agents", "Background sync"}
 	if local {
 		s = initStepper{"Agents"}
+	}
+	if members {
+		s = slices.Insert(s, slices.Index(s, "Agents"), "Projects")
 	}
 	if !embed.Available() {
 		s = append(s, "Memory search")
@@ -268,12 +274,121 @@ func pickWorkspace(cmd *cobra.Command, launch, scope string, guided bool) (bool,
 	}
 	i, err := chooseStep(tui.Step{Title: "Workspace"}, fmt.Sprintf("This folder holds %s: %s.", repos(len(members)), names), []tui.Choice{
 		{Label: "This folder only", Detail: "agents started in those repositories are not captured here"},
-		{Label: "Workspace", Detail: "agents started in any of them record here and share one memory"},
+		{Label: "Workspace with " + projects(len(members)), Detail: "each repository is a Project of its own; agents started anywhere share one memory"},
 	}, initial)
 	if err != nil {
 		return false, err
 	}
 	return i == 1, nil
+}
+
+// pickJoin decides whether launch, a member folder of the workspace ws,
+// joins it as a member Project (ADR-0016): --workspace when given; else a
+// folder not bound yet joins and a bound one stays what it is. On a
+// terminal it is asked, that answer pre-selected; asked reports it was.
+func pickJoin(cmd *cobra.Command, launch, ws string, guided bool) (join, asked bool, err error) {
+	switch project.MembershipOf(cmd.Context(), ws, launch) {
+	case project.Elsewhere:
+		other, _ := project.LinkOf(launch)
+		return false, false, fmt.Errorf("%s is a Project in the workspace %s; atlas-cli workspace remove %s there first", launch, other, launch)
+	case project.Independent:
+		join = false
+	default:
+		join = true
+	}
+	if flags := cmd.Flags(); flags.Changed("workspace") {
+		join, _ = flags.GetBool("workspace")
+		return join, false, nil
+	}
+	if !guided {
+		if join {
+			fmt.Fprintf(cmd.ErrOrStderr(), "Binding %s as a Project in the workspace %s (--workspace=false binds it on its own).\n", launch, ws)
+		}
+		return join, false, nil
+	}
+	initial := 1
+	if join {
+		initial = 0
+	}
+	i, err := chooseStep(tui.Step{Title: "Workspace"}, fmt.Sprintf("%s is in the workspace %s.", filepath.Base(launch), ws), []tui.Choice{
+		{Label: "A Project in the workspace", Detail: "its own sessions and timeline; the workspace's memory"},
+		{Label: "A Project on its own", Detail: "outside the workspace: its own sessions and memory"},
+	}, initial)
+	if err != nil {
+		return false, false, err
+	}
+	return i == 0, true, nil
+}
+
+// memberCandidates are the folders init offers as member Projects of the
+// workspace ws: its members not bound yet, and folders bound on their own.
+func memberCandidates(ctx context.Context, ws string) []string {
+	var out []string
+	for _, f := range project.MemberFolders(ws) {
+		if m := project.MembershipOf(ctx, ws, f); m == project.Unbound || m == project.Independent {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// offerMembers binds the workspace's repositories as member Projects
+// (ADR-0016). On a terminal each one that is not a Project in it yet is
+// listed, checked, and the chosen ones are bound; the rest record into the
+// workspace. Without a terminal none is bound, so no repository reaches the
+// cloud unasked: init says how (atlas-cli workspace add). A repository that
+// cannot be bound is a note, not a failed init.
+func offerMembers(cmd *cobra.Command, ws string, guided bool, steps initStepper) error {
+	ctx, out := cmd.Context(), cmd.OutOrStdout()
+	cands := memberCandidates(ctx, ws)
+	if len(cands) == 0 {
+		return nil
+	}
+	markKnown(ws, cands) // asked about here: serve does not point them out again
+	if !guided {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Note: %s record into the workspace until each is a Project of its own: atlas-cli workspace add --all, or add <folder>.\n",
+			memberNames(ws, cands))
+		return nil
+	}
+	step := steps.step("Projects")
+	choices := make([]tui.Choice, len(cands))
+	checked := make([]bool, len(cands))
+	for i, c := range cands {
+		choices[i] = tui.Choice{Label: memberNames(ws, []string{c}), Detail: "its own sessions and timeline"}
+		if project.MembershipOf(ctx, ws, c) == project.Independent {
+			choices[i].Detail = "a Project on its own now; joins as it is"
+		}
+		checked[i] = true
+	}
+	picked, err := chooseMany(step, "Which repositories become Projects in the workspace? The others record into it.", "All repositories", choices, checked)
+	if err != nil {
+		return err
+	}
+	if len(picked) == 0 {
+		return nil // the step's line says none; they record into the workspace
+	}
+	chosen := make([]string, len(picked))
+	for i, n := range picked {
+		chosen[i] = cands[n]
+	}
+	vis, _ := cmd.Flags().GetString("visibility")
+	mb, err := newMemberBinder(ctx, ws, vis)
+	if err != nil {
+		tui.Note(out, "The repositories record into the workspace for now ("+err.Error()+"); atlas-cli workspace add --all binds them later.")
+		return nil
+	}
+	if err := bindMembers(ctx, tui.Indent(out), mb, chosen); err != nil {
+		tui.Note(out, "Not bound, they record into the workspace for now: "+err.Error())
+	}
+	return nil
+}
+
+// projects is "1 Project" or "n Projects".
+func projects(n int) string {
+	if n == 1 {
+		return "1 Project"
+	}
+	return fmt.Sprintf("%d Projects", n)
 }
 
 // memberNames lists member repositories by folder name, at most five.

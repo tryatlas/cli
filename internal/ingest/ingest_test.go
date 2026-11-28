@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -101,5 +102,61 @@ func TestErrorsAndConflicts(t *testing.T) {
 	var e *Error
 	if _, err := c.Connect(context.Background(), ConnectRequest{OrgID: "o"}); !errors.As(err, &e) || e.Code != "forbidden" || e.Status != 403 {
 		t.Fatalf("connect: %v", err)
+	}
+}
+
+func TestRegistryReadsGroupsAndAServerWithoutThem(t *testing.T) {
+	answer := `{"workspaces":[{"id":"g","slug":"fleet","kind":"group","parentId":null},{"id":"a","slug":"api","kind":"workspace","parentId":"g"}],"groups":true}`
+	c := server(t, func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, answer) })
+	reg, err := c.Registry(context.Background(), "org_1")
+	if err != nil || !reg.Groups {
+		t.Fatalf("%+v %v", reg, err)
+	}
+	g, _ := reg.Find("g")
+	a, _ := reg.Find("a")
+	if !g.IsGroup() || g.Parent() != "" || a.IsGroup() || a.Parent() != "g" {
+		t.Fatalf("g=%+v a=%+v", g, a)
+	}
+	answer = `{"workspaces":[{"id":"a","slug":"api"}]}`
+	reg, err = c.Registry(context.Background(), "org_1")
+	a, _ = reg.Find("a")
+	if err != nil || reg.Groups || a.IsGroup() || a.Parent() != "" {
+		t.Fatalf("old server: %+v %v", reg, err)
+	}
+}
+
+func TestUpdateSendsOnlyTheGroupFieldsGiven(t *testing.T) {
+	var method, path, body string
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		method, path, body = r.Method, r.URL.RequestURI(), string(b)
+		_, _ = io.WriteString(w, `{"workspace":{"id":"ws_1","slug":"fleet","kind":"group"}}`)
+	})
+	group := "group"
+	got, err := c.Update(context.Background(), "org_1", "ws_1", UpdateRequest{Kind: &group})
+	if err != nil || !got.IsGroup() {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if method != http.MethodPatch || path != "/workspaces/ws_1?org=org_1" || body != `{"kind":"group"}` {
+		t.Fatalf("%s %s %s", method, path, body)
+	}
+}
+
+func TestCodeOfNamesTheServersRefusal(t *testing.T) {
+	c := server(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = io.WriteString(w, `{"error":{"code":"not_promotable","message":"no"}}`)
+	})
+	parent := "g"
+	_, err := c.Update(context.Background(), "org_1", "ws_1", UpdateRequest{ParentID: &parent})
+	if CodeOf(err) != "not_promotable" || CodeOf(errors.New("x")) != "" {
+		t.Fatalf("%v", err)
+	}
+}
+
+func TestUngroupSendsANullParent(t *testing.T) {
+	b, err := json.Marshal(UpdateRequest{Ungroup: true})
+	if err != nil || string(b) != `{"parentId":null}` {
+		t.Fatalf("%s %v", b, err)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"github.com/zeebo/blake3"
 )
 
-// Citation limits (ADR-0018).
+// Citation limits (desktop ADR-0018).
 const (
 	MaxCitations     = 8
 	MaxCitationLines = 200

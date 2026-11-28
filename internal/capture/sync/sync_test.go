@@ -126,7 +126,7 @@ func TestArtifactsExactShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	items := Target{OrgID: "org-1", WorkspaceID: "ws-1"}.items(o)
+	items := Target{OrgID: "org-1", WorkspaceID: "ws-1"}.items(o, func(string) *[]projectTag { return nil })
 	if len(items) != 4 {
 		t.Fatalf("%d items", len(items))
 	}

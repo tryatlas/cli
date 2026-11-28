@@ -83,6 +83,7 @@ var wantCommands = []string{
 	"workspace on",
 	"workspace remove",
 	"workspace sync",
+	"workspace upgrade",
 }
 
 // allCommands is wantCommands plus one hooks entry point per registered
@@ -128,7 +129,7 @@ var implemented = map[string]bool{
 	"settings": true, "sync": true, "update": true, "uninstall": true, "memory index": true, "memory compute": true,
 	"agents add": true, "agents list": true, "agents remove": true, "agents sessions": true,
 	"hooks extract": true, "hooks git post-commit": true,
-	"workspace": true, "workspace on": true, "workspace off": true, "workspace sync": true, "workspace add": true, "workspace remove": true,
+	"workspace": true, "workspace on": true, "workspace off": true, "workspace sync": true, "workspace add": true, "workspace remove": true, "workspace upgrade": true,
 }
 
 func TestStubsReportNotImplemented(t *testing.T) {

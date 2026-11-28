@@ -86,30 +86,76 @@ memory, each agent, background sync, the local model, updates.
 
 ### One folder, several repositories
 
-When a project is a folder of repositories, each with its own git:
+When a product is a folder of repositories, each with its own git, bind the
+folder once as a **workspace**:
+
+```sh
+cd acme-shop && atlas-cli init --workspace
+```
+
+On a terminal, plain `atlas-cli init` asks ("This folder only" is
+pre-selected), then offers each repository as a Project of its own. A
+workspace is never made by default, because it captures every repository
+below it. A folder already bound on its own becomes one with
+`atlas-cli workspace on`.
+
+Each repository is either a **Project in the workspace**, with its own
+`.atlas/sessions.db` and timeline, or a folder that still **records into the
+workspace** until it is added (ADR-0016). Agents started anywhere in the
+workspace share its one memory.
 
 ```
-acme-shop/        ← atlas-cli init here, once
-├── frontend/     (git)
-└── backend/      (git)
+acme-shop/        workspace folder: sessions started here record here
+├── frontend/     Project in the workspace: its own sessions and timeline
+├── backend/      Project in the workspace
+└── mobile/       records into the workspace (atlas-cli workspace add mobile)
 ```
 
-run `atlas-cli init --workspace` in `acme-shop/`. On a terminal, plain
-`atlas-cli init` asks, with "This folder only" pre-selected; a folder already
-bound alone becomes a workspace with `atlas-cli workspace on`. Agents started
-in `frontend/` or `backend/` then record into the one Project and share one
-memory, and the agent hooks are installed in every repository. A workspace is
-never made by default: it captures every repository below it. A repository
-cloned in later is part of the workspace at once; `atlas-cli workspace sync`
-hooks it. A repository with its own `atlas-cli init` is split off as its own
-Project.
+**Sessions are tagged with the Projects they change** (ADR-0017). A session
+started in `acme-shop/` that edits `backend/` and `frontend/` stays in the
+workspace's timeline and is tagged `backend` and `frontend`. A session
+started in `backend/` that also edits `frontend/` is tagged `frontend`. A
+commit in a Project links to the session that wrote it, wherever it started.
+
+**In the cloud the workspace is a group** (ADR-0018), where the organisation
+has workspace groups:
+
+```
+Atlas cloud
+▣ acme-shop          the whole product: every session, one timeline
+ ├─ ▢ frontend       its own sessions, plus those tagged frontend
+ ├─ ▢ backend
+ └─ ▢ mobile
+```
+
+- The workspace's cloud Project becomes the group when its first Project is
+  added, and new Projects are created inside it.
+- A Project the CLI finds in the cloud by its git history is moved into the
+  group only after you say yes on a terminal, or with `--yes`.
+- Sessions sent before a Project was in the group are sent again once, so
+  they get their tags.
+- Where the organisation has no groups, nothing in the cloud changes: each
+  Project is a cloud Project on its own, as before.
+
+A repository cloned into the workspace later records into it at once.
+`atlas-cli serve` points it out once, and `atlas-cli workspace sync` offers
+to make it a Project. Nothing is bound without a yes, because binding may
+send a repository to the cloud. `atlas-cli init` inside a repository of a
+workspace binds it as a Project in the workspace; `--workspace=false` binds
+it on its own instead.
 
 | command | does |
 |---|---|
-| `atlas-cli workspace` | lists the workspace's folders and which agents are hooked in each |
-| `atlas-cli workspace sync` | hooks folders added since, with the agents the workspace folder uses |
-| `atlas-cli workspace on` / `off` | turns an already bound folder into a workspace, or back |
-| `atlas-cli workspace add <folder>` / `remove <folder>` | a folder without git (or a repository deeper down) joins or leaves |
+| `atlas-cli workspace` | draws the workspace: each folder, whether it is a Project, its cloud Project, and which agents are hooked |
+| `atlas-cli workspace add <folder>…` / `--all` | makes folders Projects in the workspace; `--yes` also moves Projects found in the cloud into its group |
+| `atlas-cli workspace remove <folder>` | takes a folder out: a Project goes on on its own, keeping its sessions, and leaves the cloud group |
+| `atlas-cli workspace upgrade` / `--dry-run` / `--yes` | brings an older workspace up to date in one run: repositories become Projects, they are grouped in the cloud, earlier sessions get their tags; safe to run again |
+| `atlas-cli workspace sync` | hooks folders added since and offers to bind new repositories |
+| `atlas-cli workspace on` / `off` | turns an already bound folder into a workspace, or back (its Projects go on on their own) |
+
+`atlas-cli serve` in the workspace folder also sends its Projects' waiting
+sessions, so a turn recorded offline in `backend/` reaches the cloud without
+a new hook there.
 
 ## Shared memory
 
@@ -216,7 +262,8 @@ colour only for status) and prints plain text to pipes and scripts.
 | `atlas-cli` | the overview: logo, commands by group |
 | `atlas-cli login` · `logout` · `whoami` | sign in with the device grant; the session file is the only secret kept (mode 0600) |
 | `atlas-cli org list \| use \| create` | organisations |
-| `atlas-cli init` | bind the folder, hook the agents, choose background sync and memory search |
+| `atlas-cli init` | bind the folder, hook the agents, choose background sync and memory search; `--workspace` for a folder of repositories |
+| `atlas-cli workspace [add \| remove \| upgrade \| sync \| on \| off]` | a folder of repositories bound once: its Projects, here and in the cloud |
 | `atlas-cli settings` | everything on one screen |
 | `atlas-cli status` | sign-in, Project, capture health, commits linked, sync, memory, agents |
 | `atlas-cli agents add \| remove \| list \| sessions` | the hooks and memory entry per agent; the sessions seen |
@@ -234,7 +281,8 @@ colour only for status) and prints plain text to pipes and scripts.
 | path | what |
 |---|---|
 | `.atlas/` | the app's per-project files only: `sessions.db`, `blobs/`, `memory/`, `project.json` |
-| `~/.local/state/atlas-cli/projects/<hash>/` | the CLI's own: hook state, `hooks.log`, the listener's run file, preferences |
+| `<repository>/.atlas/workspace.json` | in a Project of a workspace: `{"memberOf": ".."}`, the link to the workspace folder |
+| `~/.local/state/atlas-cli/projects/<hash>/` | the CLI's own: hook state, `hooks.log`, the listener's run file, preferences; for a workspace, which repositories were pointed out and which group its sessions were last sent for |
 | `~/.local/state/atlas-cli/compute.json` | this machine's memory compute setting, and endpoint verdicts beside it |
 | `~/Library/Application Support/dev.atlas.ide/models/` | the local search model, shared with the app (`~/.local/share/…` on Linux) |
 
